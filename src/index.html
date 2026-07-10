@@ -319,7 +319,7 @@
             <canvas id="lcd" width="160" height="144"></canvas>
         </div>
         
-        <div class="controls">
+        <div class="controls" id="controls-hint">
             <p>ARROWS | Z=A | X=B | ENTER=START | SHIFT=SEL</p>
         </div>
 
@@ -386,6 +386,27 @@
 
     <script>
     // ============================================================
+    // 0. TIZEN TV SETUP
+    // ============================================================
+    // Detect whether we're running as a Tizen web app (vs. plain browser)
+    const isTizen = (typeof tizen !== 'undefined');
+
+    if (isTizen && tizen.tvinputdevice) {
+        // The D-pad (arrow keys) and OK/Enter work out of the box.
+        // Back and the colored remote buttons need to be registered
+        // explicitly, otherwise the platform intercepts them (Back in
+        // particular would otherwise close/exit the app).
+        ['Back', 'ColorF0Red', 'ColorF1Green', 'ColorF2Yellow', 'ColorF3Blue'].forEach(key => {
+            try { tizen.tvinputdevice.registerKey(key); } catch (e) { console.warn('[TIZEN] registerKey failed for', key, e); }
+        });
+    }
+
+    if (isTizen) {
+        const hint = document.getElementById('controls-hint');
+        if (hint) hint.innerHTML = '<p>D-PAD | OK=START | RED=A | YELLOW=SEL | BACK=B</p>';
+    }
+
+    // ============================================================
     // 1. GESTIÓN DE CARGA DE ROM
     // ============================================================
     const romInput = document.getElementById('rom-upload');
@@ -435,6 +456,27 @@
         };
         reader.readAsArrayBuffer(file);
     });
+
+    // Auto-load the bundled example ROM on startup (used on Tizen TV where
+    // there's no comfortable way to browse for a file with a remote).
+    // Falls back silently if roms/examples.gb isn't reachable (e.g. when
+    // testing this file directly in a desktop browser without that folder).
+    const AUTO_ROM_PATH = 'roms/examples.gb';
+
+    async function autoLoadDefaultRom() {
+        try {
+            const res = await fetch(AUTO_ROM_PATH);
+            if (!res.ok) throw new Error('HTTP ' + res.status);
+            const buffer = await res.arrayBuffer();
+            const data = new Uint8Array(buffer);
+            const name = AUTO_ROM_PATH.split('/').pop();
+            console.log('[JS] Auto-loading bundled ROM: ' + name + ' (' + data.length + ' bytes)');
+            loadRomData(data, name);
+        } catch (err) {
+            console.warn('[JS] Auto-load of bundled ROM skipped:', err);
+            romNameDisplay.innerText = 'No cartridge inserted';
+        }
+    }
 
     // ============================================================
     // 2. AUDIO SYSTEM — AudioWorkletNode (reemplaza ScriptProcessor)
@@ -600,17 +642,30 @@ registerProcessor('gb-processor', GBProcessor);
     }
 
     // ============================================================
-    // 5. INPUT DE TECLADO (sin cambios)
+    // 5. INPUT DE TECLADO (+ mando a distancia Tizen)
     // ============================================================
     const KEY_MAP = {
         'ArrowRight':0, 'ArrowLeft':1, 'ArrowUp':2, 'ArrowDown':3,
         'KeyZ':4, 'KeyX':5, 'ShiftLeft':6, 'Enter':7
     };
 
+    // Physical TV remotes don't have Z/X/Shift keys. The D-pad and OK
+    // (which reports as 'Enter', already mapped to START above) work out
+    // of the box; Back and the colored buttons need their own mapping.
+    // Adjust to taste - these are just sensible defaults.
+    const TIZEN_KEYCODE_MAP = {
+        10009: 5,   // Back          -> B
+        403:   4,   // Red (F0)      -> A
+        405:   6,   // Yellow (F2)   -> SELECT
+    };
+
     function setupKeyboard() {
         const handler = (e, isDown) => {
             const btn = KEY_MAP[e.code];
-            if (btn !== undefined) { e.preventDefault(); pressBtn(btn, isDown); }
+            if (btn !== undefined) { e.preventDefault(); pressBtn(btn, isDown); return; }
+
+            const tizenBtn = TIZEN_KEYCODE_MAP[e.keyCode];
+            if (tizenBtn !== undefined) { e.preventDefault(); pressBtn(tizenBtn, isDown); }
         };
         document.addEventListener('keydown', e => handler(e, true));
         document.addEventListener('keyup',   e => handler(e, false));
@@ -683,6 +738,10 @@ registerProcessor('gb-processor', GBProcessor);
                 console.log("[JS] Cargando ROM pendiente...");
                 loadRomData(pendingRomData.data, pendingRomData.name);
                 pendingRomData = null;
+            } else {
+                // Sin ROM pendiente del usuario -> intentar cargar el cartucho
+                // de ejemplo empaquetado (roms/examples.gb)
+                autoLoadDefaultRom();
             }
         }
     };
