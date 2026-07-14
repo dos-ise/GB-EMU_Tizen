@@ -290,14 +290,19 @@
         <div class="screen-border">
             <canvas id="lcd" width="160" height="144"></canvas>
             <div class="rom-select-overlay" id="rom-select-overlay">
-                <div class="rom-select-title">SELECT ROM (USB)</div>
+                <div class="rom-select-title" id="rom-select-title">SELECT ROM (USB)</div>
                 <div id="rom-select-list"></div>
                 <div class="rom-select-hint">D-PAD/STICK = MOVE&nbsp;&nbsp;|&nbsp;&nbsp;OK/A = LOAD</div>
+            </div>
+            <div class="rom-select-overlay" id="game-menu-overlay">
+                <div class="rom-select-title">GAME MENU</div>
+                <div id="game-menu-list"></div>
+                <div class="rom-select-hint">D-PAD/STICK = MOVE&nbsp;&nbsp;|&nbsp;&nbsp;OK/A = SELECT&nbsp;&nbsp;|&nbsp;&nbsp;BLUE = CLOSE</div>
             </div>
         </div>
         
         <div class="controls" id="controls-hint">
-            <p>D-PAD/STICK | OK/PAD-START=START | RED/PAD-A=A | BACK/PAD-B=B | YELLOW/PAD-SEL=SEL</p>
+            <p>D-PAD/STICK | OK/PAD-START=START | RED/PAD-A=A | BACK/PAD-B=B | YELLOW/PAD-SEL=SEL | BLUE=MENU</p>
         </div>
 
         <!-- CONTROLES TÁCTILES — solo visibles en mobile -->
@@ -494,7 +499,7 @@
                 const dir = await resolveStorage(storage.label);
                 const gbFiles = await listGbFiles(dir);
                 console.log('[USB]', storage.label, '-> matched', gbFiles.length, 'ROM(s):', gbFiles.map(f => f.name));
-                gbFiles.forEach(f => found.push({ file: f, storageLabel: storage.label }));
+                gbFiles.forEach(f => found.push({ type: 'usb', name: f.name, file: f, storageLabel: storage.label }));
             } catch (err) {
                 console.warn('[USB] Could not read storage', storage.label, err);
             }
@@ -511,12 +516,12 @@
                 const usbRoms = await findAllUsbRoms();
                 if (usbRoms.length === 1) {
                     const entry = usbRoms[0];
-                    romNameDisplay.innerText = 'Loading from USB: ' + entry.file.name;
+                    romNameDisplay.innerText = 'Loading from USB: ' + entry.name;
                     const data = await readFileAsBytes(entry.file);
-                    loadRomData(data, entry.file.name);
+                    loadRomData(data, entry.name);
                     return;
                 } else if (usbRoms.length > 1) {
-                    showRomSelector(usbRoms);
+                    showRomSelector(usbRoms, 'SELECT ROM (USB)');
                     return;
                 }
             } catch (err) {
@@ -540,22 +545,24 @@
 
     function renderRomSelector() {
         const list = document.getElementById('rom-select-list');
-        list.innerHTML = romSelectEntries.map((entry, i) =>
-            `<div class="rom-select-item${i === romSelectIndex ? ' selected' : ''}">${
-                entry.file.name}  <span style="opacity:.6;font-size:11px">[${entry.storageLabel}]</span></div>`
-        ).join('');
+        list.innerHTML = romSelectEntries.map((entry, i) => {
+            const label = entry.type === 'bundled'
+                ? entry.name
+                : `${entry.name}  <span style="opacity:.6;font-size:11px">[${entry.storageLabel}]</span>`;
+            return `<div class="rom-select-item${i === romSelectIndex ? ' selected' : ''}">${label}</div>`;
+        }).join('');
 
         // Keep the selected item scrolled into view
         const selectedEl = list.children[romSelectIndex];
         if (selectedEl) selectedEl.scrollIntoView({ block: 'nearest' });
     }
 
-    function showRomSelector(entries) {
+    function showRomSelector(entries, title) {
         romSelectEntries = entries;
         romSelectIndex = 0;
         romSelectActive = true;
+        document.getElementById('rom-select-title').textContent = title || 'SELECT ROM';
         document.getElementById('rom-select-overlay').classList.add('visible');
-        romNameDisplay.innerText = entries.length + ' ROMs found on USB';
         renderRomSelector();
     }
 
@@ -564,15 +571,31 @@
         if (!entry) return;
         romSelectActive = false;
         document.getElementById('rom-select-overlay').classList.remove('visible');
-        romNameDisplay.innerText = 'Loading from USB: ' + entry.file.name;
+        romNameDisplay.innerText = 'Loading: ' + entry.name;
         try {
-            const data = await readFileAsBytes(entry.file);
-            loadRomData(data, entry.file.name);
+            if (entry.type === 'bundled') {
+                await autoLoadDefaultRom();
+            } else {
+                const data = await readFileAsBytes(entry.file);
+                loadRomData(data, entry.name);
+            }
         } catch (err) {
-            console.error('[USB] Failed to load selected ROM:', err);
-            romNameDisplay.innerText = 'Error loading ' + entry.file.name;
+            console.error('[ROM] Failed to load selected ROM:', err);
+            romNameDisplay.innerText = 'Error loading ' + entry.name;
             romNameDisplay.style.color = '#cc0000';
         }
+    }
+
+    // Re-scans USB and always shows the picker (even with 0/1 USB ROMs),
+    // with the bundled example ROM always offered as an extra option.
+    // Used by the in-game "Change ROM" menu entry.
+    async function openRomChangeMenu() {
+        let entries = [];
+        if (isTizen) {
+            try { entries = await findAllUsbRoms(); } catch (err) { console.warn('[USB] Rescan failed:', err); }
+        }
+        entries = entries.concat([{ type: 'bundled', name: 'examples.gb (bundled)' }]);
+        showRomSelector(entries, 'CHANGE ROM');
     }
 
     // Handles a GB button id (0=RIGHT,1=LEFT,2=UP,3=DOWN,4=A,5=B,6=SEL,7=START)
@@ -588,6 +611,83 @@
             renderRomSelector();
         } else if (id === 4 || id === 7) { // A or START -> confirm
             confirmRomSelector();
+        }
+        return true;
+    }
+
+    // ============================================================
+    // GAME MENU (Resume / Change ROM / Exit App)
+    // Opened with the Blue remote button, or SELECT+START held together
+    // on a gamepad. Lets you back out of a running ROM without having to
+    // restart the whole app.
+    // ============================================================
+    const GAME_MENU_OPTIONS = ['Resume', 'Change ROM (USB)', 'Exit App'];
+    let gameMenuActive = false;
+    let gameMenuIndex  = 0;
+
+    function renderGameMenu() {
+        const list = document.getElementById('game-menu-list');
+        list.innerHTML = GAME_MENU_OPTIONS.map((label, i) =>
+            `<div class="rom-select-item${i === gameMenuIndex ? ' selected' : ''}">${label}</div>`
+        ).join('');
+    }
+
+    function openGameMenu() {
+        if (romSelectActive) return; // don't stack over the ROM picker
+        gameMenuActive = true;
+        gameMenuIndex = 0;
+        document.getElementById('game-menu-overlay').classList.add('visible');
+        renderGameMenu();
+    }
+
+    function closeGameMenu() {
+        gameMenuActive = false;
+        document.getElementById('game-menu-overlay').classList.remove('visible');
+    }
+
+    function toggleGameMenu() {
+        if (gameMenuActive) closeGameMenu(); else openGameMenu();
+    }
+
+    function exitApp() {
+        console.log('[APP] Exit requested');
+        if (isTizen && window.tizen && tizen.application) {
+            try { tizen.application.getCurrentApplication().exit(); return; } catch (err) {
+                console.error('[APP] tizen.application.exit() failed:', err);
+            }
+        }
+        // Not on Tizen (e.g. desktop browser testing) - best effort only,
+        // most browsers block script-initiated window.close() anyway.
+        try { window.close(); } catch (e) { /* ignored */ }
+    }
+
+    async function confirmGameMenu() {
+        const choice = GAME_MENU_OPTIONS[gameMenuIndex];
+        if (choice === 'Resume') {
+            closeGameMenu();
+        } else if (choice === 'Change ROM (USB)') {
+            closeGameMenu();
+            await openRomChangeMenu();
+        } else if (choice === 'Exit App') {
+            exitApp();
+        }
+    }
+
+    // Handles a GB button id while the game menu is open. Returns true if
+    // it consumed the press (same swallow-on-keyup pattern as the ROM picker).
+    function handleGameMenuInput(id, down) {
+        if (!gameMenuActive || !down) return gameMenuActive;
+
+        if (id === 2) { // UP
+            gameMenuIndex = (gameMenuIndex - 1 + GAME_MENU_OPTIONS.length) % GAME_MENU_OPTIONS.length;
+            renderGameMenu();
+        } else if (id === 3) { // DOWN
+            gameMenuIndex = (gameMenuIndex + 1) % GAME_MENU_OPTIONS.length;
+            renderGameMenu();
+        } else if (id === 4 || id === 7) { // A or START -> confirm
+            confirmGameMenu();
+        } else if (id === 5) { // B -> cancel/close
+            closeGameMenu();
         }
         return true;
     }
@@ -676,9 +776,10 @@
     function pressBtn(id, down) {
         id = parseInt(id);
 
-        // While the USB ROM picker is open, D-pad/A/START navigate the list
-        // instead of controlling the (not yet loaded) emulator.
+        // While the USB ROM picker or game menu is open, D-pad/A/START
+        // navigate those instead of controlling the emulator.
         if (handleRomSelectorInput(id, down)) return;
+        if (handleGameMenuInput(id, down)) return;
 
         if (buttonState[id] === down) return;
         buttonState[id] = down;
@@ -712,8 +813,18 @@
         405:   6,   // Yellow (F2)   -> SELECT
     };
 
+    // Not a GB button - opens/closes the game menu (Resume/Change ROM/Exit).
+    // 406 = Blue (F3) on the TV remote, 8 = Backspace for desktop testing.
+    const MENU_TOGGLE_KEYCODES = new Set([406, 8]);
+
     function setupKeyboard() {
         const handler = (e, isDown) => {
+            if (isDown && MENU_TOGGLE_KEYCODES.has(e.keyCode)) {
+                e.preventDefault();
+                toggleGameMenu();
+                return;
+            }
+
             const btn = KEY_MAP[e.code];
             if (btn !== undefined) { e.preventDefault(); pressBtn(btn, isDown); return; }
 
@@ -796,6 +907,7 @@
     const STICK_DEADZONE = 0.35;
     let gamepadPrevState  = {}; // gamepad index -> { [btnId]: boolean }
     let gamepadPollHandle = null;
+    let gamepadMenuComboPrev = {}; // gamepad index -> bool, for edge-triggering
 
     function pollGamepads() {
         const pads = navigator.getGamepads ? navigator.getGamepads() : [];
@@ -821,6 +933,17 @@
             if (axisY >  STICK_DEADZONE) current[3] = true; // DOWN
             if (axisX < -STICK_DEADZONE) current[1] = true; // LEFT
             if (axisX >  STICK_DEADZONE) current[0] = true; // RIGHT
+
+            // SELECT+START held together -> toggle the game menu. Checked
+            // before the normal diff loop below so it doesn't also fire as
+            // individual SELECT/START button presses into the emulator.
+            const menuCombo = !!(current[6] && current[7]);
+            if (menuCombo && !gamepadMenuComboPrev[i]) {
+                toggleGameMenu();
+                current[6] = false;
+                current[7] = false;
+            }
+            gamepadMenuComboPrev[i] = menuCombo;
 
             // Diff against the previous frame, only fire on transitions
             for (let gbId = 0; gbId < 8; gbId++) {
