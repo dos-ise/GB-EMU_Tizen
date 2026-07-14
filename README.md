@@ -19,6 +19,14 @@ This project uses [GB-EMU](https://github.com/dos-ise/GB-EMU_Tizen) compiled to 
 
 ---
 
+## Screenshots
+
+| ROM Picker (USB) | Gameplay | In-Game Menu |
+|:---:|:---:|:---:|
+| ![ROM select screen showing mario.gb and tetris.gb found on USB](docs/screenshots/rom-select.jpg) | ![Tetris title screen running on the TV](docs/screenshots/gameplay-tetris.jpg) | ![In-game menu with Resume, Change ROM and Exit App options](docs/screenshots/game-menu.jpg) |
+
+---
+
 ## Installation
 
 ### 1. Enable Developer Mode on your TV
@@ -86,9 +94,9 @@ No rebuilding required — ROMs are loaded from a **USB stick** plugged into the
 
 ### How it works
 
-1. Copy your **legally obtained** Game Boy (`.gb`) to the root of a USB stick
+1. Copy your **legally obtained** Game Boy / Game Boy Color ROM(s) (`.gb` / `.gbc`) to the root of a USB stick
 2. Plug the stick into the TV and start the app
-3. On startup, the app scans every mounted USB storage for `.gb` files:
+3. On startup, the app scans every mounted USB storage for `.gb`/`.gbc` files:
    - **No ROM found** → falls back to the bundled example ROM (`roms/examples.gb`)
    - **Exactly one ROM found** → loads it automatically, no interaction needed
    - **More than one ROM found** → shows an on-screen picker (D-Pad/Stick to move, OK/A to load)
