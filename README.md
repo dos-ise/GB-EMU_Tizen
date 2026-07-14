@@ -10,7 +10,8 @@ This project uses [GB-EMU](https://github.com/dos-ise/GB-EMU_Tizen) compiled to 
 ## Features
 
 - Runs entirely on the TV (no streaming required)
-- Ships with a bundled example ROM (`examples.gb`) that **loads automatically on startup** — no file browsing needed on a TV remote
+- **Loads ROMs straight from a USB stick** — no rebuild needed to play a different game, with an on-screen picker if multiple ROMs are found (falls back to a bundled example ROM if none are present)
+- **In-game menu** (Blue button / Select+Start) to switch ROMs or exit the app without restarting
 - Supports Samsung TV remote control mapping (D-Pad, OK, Back, colored buttons)
 - Supports standard gamepads/controllers (polled via the Gamepad API, D-Pad + left stick)
 - Optimized for Samsung Tizen TV devices
@@ -81,18 +82,29 @@ docker rm gbemu-tmp
 
 ## Using Your Own ROMs
 
-By default, this build bundles the example ROM (`roms/examples.gb`), which loads automatically when the app starts — there's no in-app file picker experience worth using on a TV remote.
+No rebuilding required — ROMs are loaded from a **USB stick** plugged into the TV, using the Tizen Filesystem API (`tizen.filesystem`).
 
-To ship a different ROM:
+### How it works
 
-1. Replace `roms/examples.gb` with your own **legally obtained** Game Boy ROM (keep the filename `examples.gb`, or update the path in `src/index.html`'s `AUTO_ROM_PATH`)
-2. Run the build script again:
-   ```bash
-   build.bat
-   ```
-3. Install the new `GBEmu.wgt` file on your TV
+1. Copy your **legally obtained** Game Boy (`.gb`) to the root of a USB stick
+2. Plug the stick into the TV and start the app
+3. On startup, the app scans every mounted USB storage for `.gb` files:
+   - **No ROM found** → falls back to the bundled example ROM (`roms/examples.gb`)
+   - **Exactly one ROM found** → loads it automatically, no interaction needed
+   - **More than one ROM found** → shows an on-screen picker (D-Pad/Stick to move, OK/A to load)
 
-**Note:** This repository does not include any copyrighted ROMs. You must own a legitimate copy of any ROM you bundle.
+### Switching ROMs without restarting the app
+
+Open the **in-game menu** at any time:
+
+| Input | Action |
+|-------|--------|
+| **BLUE** (remote) | Open/close game menu |
+| **SELECT + START together** (gamepad) | Open/close game menu |
+
+From the menu you can pick **Change ROM (USB)** to re-scan the stick and load a different ROM (the bundled example is always offered too), or **Exit App** to close GBEmu entirely — see [Controls](#controls) below.
+
+**Note:** ROMs are only scanned at the top level of each USB drive (no subfolders). This repository does not include any copyrighted ROMs — you must own a legitimate copy of anything you copy to the stick.
 
 ---
 
@@ -106,6 +118,7 @@ To ship a different ROM:
 | **RED** | A |
 | **YELLOW** | SELECT |
 | **BACK** | B |
+| **BLUE** | Open/close game menu (Resume / Change ROM / Exit App) |
 
 ### Controller
 | Button | Action |
@@ -115,6 +128,7 @@ To ship a different ROM:
 | **B** | B |
 | **Select / Back** | SELECT |
 | **Start** | START |
+| **Select + Start** (held together) | Open/close game menu (Resume / Change ROM / Exit App) |
 
 ---
 
