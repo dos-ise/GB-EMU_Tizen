@@ -58,3 +58,19 @@ void MBC1::writeRAM(uint16_t address, uint8_t value) {
     uint16_t offset = address - 0xA000;
     if (offset < ram.size()) ram[offset] = value;
 }
+// ============================================================
+// SAVE STATES
+// ============================================================
+void MBC1::saveState(StateWriter& out) const {
+    out.write(romBank);
+    out.write(ramBank);
+    out.write(ramEnabled);
+    out.write(bankingMode);
+}
+
+void MBC1::loadState(StateReader& in) {
+    romBank     = in.read<uint8_t>();
+    ramBank     = in.read<uint8_t>();
+    ramEnabled  = in.read<bool>();
+    bankingMode = in.read<uint8_t>();
+}

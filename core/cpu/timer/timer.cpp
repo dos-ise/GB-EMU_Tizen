@@ -149,3 +149,15 @@ void timer::step(int t_cycles) {
         }
     }
 }
+// ============================================================
+// SAVE STATES
+// ============================================================
+void timer::saveState(StateWriter& out) const {
+    out.write(div_counter);
+    out.write(tima_counter);
+}
+
+void timer::loadState(StateReader& in) {
+    div_counter  = in.read<int>();
+    tima_counter = in.read<int>();
+}

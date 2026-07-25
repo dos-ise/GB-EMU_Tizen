@@ -198,3 +198,22 @@ void MBC3::updateRTC()
     // Preservamos los bits que el juego puede haber escrito previamente:
     rtcRegisters[4] |= (rtcRegisters[4] & 0xFE); // conserva halt/carry si se setearon
 }
+// ============================================================
+// SAVE STATES
+// ============================================================
+// rtcRegisters no se guarda: se recalcula del reloj real al leer.
+void MBC3::saveState(StateWriter& out) const {
+    out.write(romBank);
+    out.write(ramRtcSelect);
+    out.write(ramEnabled);
+    out.write(latchValue);
+    out.writeBytes(latchedRtcRegisters, sizeof(latchedRtcRegisters));
+}
+
+void MBC3::loadState(StateReader& in) {
+    romBank      = in.read<uint8_t>();
+    ramRtcSelect = in.read<uint8_t>();
+    ramEnabled   = in.read<bool>();
+    latchValue   = in.read<uint8_t>();
+    in.readBytes(latchedRtcRegisters, sizeof(latchedRtcRegisters));
+}

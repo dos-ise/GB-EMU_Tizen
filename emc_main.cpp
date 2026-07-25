@@ -12,6 +12,7 @@
 #include "core/cpu/ppu/ppu.h"
 #include "core/cpu/timer/timer.h"
 #include "core/cpu/APU/apu.h"
+#include "core/state/state.h"
 
 // Punteros globales
 cpu* global_cpu = nullptr;
@@ -23,6 +24,15 @@ APU* global_apu = nullptr;
 // Estado del sistema
 bool is_game_loaded = false;
 bool audio_muted = false;
+
+// Buffer del último save state generado (JS lo lee vía get_state_data)
+std::vector<uint8_t> state_buffer;
+
+// Formato del save state: magic + versión + título de la ROM como
+// salvaguarda, luego cada componente en orden fijo.
+// Subir STATE_VERSION invalida states viejos si cambia el layout.
+constexpr uint32_t STATE_MAGIC   = 0x54534247; // "GBST" little-endian
+constexpr uint32_t STATE_VERSION = 1;
 
 // --- FUNCIÓN DE LIMPIEZA ---
 // Borra la memoria del juego anterior antes de cargar uno nuevo
@@ -72,6 +82,82 @@ extern "C" {
     
     void set_audio_muted(bool muted) {
         audio_muted = muted;
+    }
+
+    // ============================================================
+    // SAVE STATES
+    // ============================================================
+    // save_state(): serializa el estado completo en state_buffer y
+    // devuelve su tamaño en bytes (0 = fallo / sin juego cargado).
+    // JS lo copia después con get_state_data().
+    int save_state() {
+        if (!is_game_loaded || !global_cpu) return 0;
+
+        try {
+            StateWriter w;
+            w.write(STATE_MAGIC);
+            w.write(STATE_VERSION);
+
+            // Título de la ROM (guard extra contra states de otro juego)
+            const std::string& title = global_mmu->romTitle();
+            w.write(static_cast<uint32_t>(title.size()));
+            w.writeBytes(title.data(), title.size());
+
+            global_mmu->saveState(w);
+            global_cpu->saveState(w);
+            global_ppu->saveState(w);
+            global_timer->saveState(w);
+            global_apu->saveState(w);
+
+            state_buffer = std::move(w.data);
+            std::cout << "[C++] Save state creado: " << state_buffer.size() << " bytes\n";
+            return static_cast<int>(state_buffer.size());
+        } catch (const std::exception& e) {
+            std::cerr << "[C++] ERROR creando save state: " << e.what() << "\n";
+            return 0;
+        }
+    }
+
+    uint8_t* get_state_data() {
+        return state_buffer.data();
+    }
+
+    // load_state(): restaura un state previamente guardado sobre la ROM
+    // ya cargada. Devuelve 1 si tuvo éxito, 0 si el state es inválido,
+    // de otra versión o de otra ROM. Si devuelve 0 tras empezar a aplicar
+    // el state, el emulador puede quedar inconsistente: JS recarga la ROM.
+    int load_state(uint8_t* data, int size) {
+        if (!is_game_loaded || !global_cpu || !data || size <= 0) return 0;
+
+        StateReader r(data, static_cast<size_t>(size));
+
+        uint32_t magic   = r.read<uint32_t>();
+        uint32_t version = r.read<uint32_t>();
+        if (r.failed() || magic != STATE_MAGIC) { std::cerr << "[C++] Save state: magic inválido\n"; return 0; }
+        if (version != STATE_VERSION)           { std::cerr << "[C++] Save state: versión incompatible\n"; return 0; }
+
+        uint32_t title_len = r.read<uint32_t>();
+        if (r.failed() || title_len > 32) { std::cerr << "[C++] Save state: cabecera corrupta\n"; return 0; }
+        std::string title(title_len, '\0');
+        r.readBytes(&title[0], title_len);
+        if (r.failed() || title != global_mmu->romTitle()) {
+            std::cerr << "[C++] Save state pertenece a otra ROM (" << title << ")\n";
+            return 0;
+        }
+
+        global_mmu->loadState(r);
+        global_cpu->loadState(r);
+        global_ppu->loadState(r);
+        global_timer->loadState(r);
+        global_apu->loadState(r);
+
+        if (r.failed()) {
+            std::cerr << "[C++] Save state truncado o corrupto\n";
+            return 0;
+        }
+
+        std::cout << "[C++] Save state restaurado (" << size << " bytes)\n";
+        return 1;
     }
 
     // ============================================================
@@ -130,15 +216,20 @@ void main_loop() {
     while (t_cycles_this_frame < T_CYCLES_PER_FRAME) {
         int cpu_t_cycles = global_cpu->step();
         if (cpu_t_cycles < 4) cpu_t_cycles = 4;
-        
-        global_ppu->step(cpu_t_cycles);
+
+        // En doble velocidad (CGB), la CPU corre 2x pero PPU y APU
+        // siguen a velocidad normal. El timer (DIV/TIMA) va con la CPU.
+        int ppu_t_cycles = global_mmu->isDoubleSpeed() ? cpu_t_cycles / 2
+                                                       : cpu_t_cycles;
+
+        global_ppu->step(ppu_t_cycles);
         global_timer->step(cpu_t_cycles);
-        
+
         if (!audio_muted) {
-            global_apu->tick(cpu_t_cycles);
+            global_apu->tick(ppu_t_cycles);
         }
-        
-        t_cycles_this_frame += cpu_t_cycles;
+
+        t_cycles_this_frame += ppu_t_cycles;
     }
 
     // Dibujar pantalla

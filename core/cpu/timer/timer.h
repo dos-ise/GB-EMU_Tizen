@@ -3,12 +3,17 @@
 #include <iostream>
 #include <iomanip>
 #include "mmu/mmu.h"
+#include "state/state.h"
 
 class timer {
 public:
     timer(mmu& mmu_ref);
     void step(int cycles);
     void reset();
+
+    // Save states
+    void saveState(StateWriter& out) const;
+    void loadState(StateReader& in);
     
     // ============================================================
     // FUNCIONES DE DEBUGGING

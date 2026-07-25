@@ -6,33 +6,76 @@
     <title>GameBoy Emulator - WebAssembly</title>
     <style>
         body {
-            background-color: #202020;
+            /* Same color as the case so any letterboxing left by the
+               scale-to-fit is invisible - the case appears full screen. */
+            background-color: #c0c0c0;
             color: white;
             font-family: 'Courier New', Courier, monospace;
             display: flex;
             flex-direction: column;
             align-items: center;
             justify-content: center;
-            min-height: 100vh;
+            height: 100vh;
             margin: 0;
-            padding: 20px;
+            padding: 0;
+            overflow: hidden;
         }
         .gb-case {
+            /* Scaled at runtime (see fitCaseToScreen) so the emulator
+               always fills the full screen height on any TV/display. */
+            transform-origin: center center;
             background-color: #c0c0c0;
-            padding: 32px;
-            border-radius: 14px 14px 56px 14px;
-            box-shadow: 5px 5px 15px rgba(0,0,0,0.5);
+            padding: 12px 24px;
             display: flex;
             flex-direction: column;
             align-items: center;
+        }
+        /* Screen flanked by two side panels (cartridge info left, control
+           hints right) instead of stacking them above/below - keeps the
+           case short so fitCaseToScreen can scale the LCD near full height. */
+        .main-row {
+            display: flex;
+            flex-direction: row;
+            align-items: center;
+            gap: 16px;
+        }
+        .side-panel {
+            width: 190px;
+            flex: 0 0 auto;
         }
         .screen-border {
             background-color: #505050;
             padding: 28px 56px;
             border-radius: 14px 14px 42px 14px;
-            margin-bottom: 24px;
             box-shadow: inset 2px 2px 5px rgba(0,0,0,0.5);
             position: relative;
+        }
+        /* Desktop-only ROM file picker; revealed by JS when not on Tizen
+           (the TV UI has no pointer, it loads ROMs from USB/Wi-Fi instead) */
+        input[type="file"] { display: none; }
+        .file-upload-btn {
+            display: none;
+            background: #8b8b8b;
+            color: #222;
+            padding: 10px 20px;
+            border-radius: 5px;
+            cursor: pointer;
+            border: 2px solid #666;
+            font-weight: bold;
+            font-size: 14px;
+            transition: all 0.2s;
+            box-shadow: 0 4px 0 #555;
+            margin-bottom: 6px;
+        }
+        .file-upload-btn.desktop-visible { display: inline-block; }
+        .file-upload-btn:hover {
+            background: #999;
+            transform: translateY(1px);
+            box-shadow: 0 3px 0 #555;
+        }
+        .file-upload-btn:active {
+            transform: translateY(4px);
+            box-shadow: 0 0 0 #555;
         }
         .rom-select-overlay {
             display: none;
@@ -81,16 +124,24 @@
         }
         
         .cartridge-slot {
-            margin-bottom: 15px;
             width: 100%;
             text-align: center;
         }
 
         .controls {
-            text-align: center;
+            text-align: left;
             font-size: 12px;
             color: #333;
-            margin-top: 10px;
+        }
+        .controls .hint-line {
+            margin: 4px 0;
+            white-space: nowrap;
+        }
+        .controls .hint-note {
+            margin-top: 12px;
+            font-size: 10px;
+            color: #555;
+            white-space: normal;
         }
         
         /* Debug Panel Styles */
@@ -283,27 +334,52 @@
 <body>
 
     <div class="gb-case">
-        <div class="cartridge-slot">
-            <div id="rom-name" style="font-size: 12px; color: #555;">No cartridge inserted</div>
+        <div class="main-row">
+        <div class="side-panel">
+            <div class="cartridge-slot">
+                <label for="rom-upload" class="file-upload-btn" id="rom-upload-label">INSERT CARTRIDGE (.gb/.gbc)</label>
+                <input type="file" id="rom-upload" accept=".gb,.gbc" />
+                <div id="rom-name" style="font-size: 12px; color: #555;">No cartridge inserted</div>
+            </div>
         </div>
 
         <div class="screen-border">
             <canvas id="lcd" width="160" height="144"></canvas>
             <div class="rom-select-overlay" id="rom-select-overlay">
-                <div class="rom-select-title" id="rom-select-title">SELECT ROM (USB)</div>
+                <div class="rom-select-title" id="rom-select-title">SELECT ROM</div>
                 <div id="rom-select-list"></div>
                 <div class="rom-select-hint">D-PAD/STICK = MOVE&nbsp;&nbsp;|&nbsp;&nbsp;OK/A = LOAD</div>
+            </div>
+            <div class="rom-select-overlay" id="server-config-overlay">
+                <div class="rom-select-title">ROM SERVER ADDRESS</div>
+                <div id="server-config-value" style="text-align:center;font-family:monospace;font-size:18px;margin:12px 0;"></div>
+                <div class="rom-select-hint">LEFT/RIGHT = DIGIT&nbsp;&nbsp;|&nbsp;&nbsp;UP/DOWN = CHANGE&nbsp;&nbsp;|&nbsp;&nbsp;OK/A = SAVE&nbsp;&nbsp;|&nbsp;&nbsp;B = CANCEL</div>
             </div>
             <div class="rom-select-overlay" id="game-menu-overlay">
                 <div class="rom-select-title">GAME MENU</div>
                 <div id="game-menu-list"></div>
-                <div class="rom-select-hint">D-PAD/STICK = MOVE&nbsp;&nbsp;|&nbsp;&nbsp;OK/A = SELECT&nbsp;&nbsp;|&nbsp;&nbsp;BLUE = CLOSE</div>
+                <div class="rom-select-hint">D-PAD/STICK = MOVE&nbsp;&nbsp;|&nbsp;&nbsp;OK/A = SELECT&nbsp;&nbsp;|&nbsp;&nbsp;BACK = CLOSE</div>
+            </div>
+            <div class="rom-select-overlay" id="confirm-overlay">
+                <div class="rom-select-title" id="confirm-title">CONFIRM</div>
+                <div id="confirm-message" style="font-size:14px;margin-bottom:16px;"></div>
+                <div id="confirm-list"></div>
+                <div class="rom-select-hint">D-PAD/STICK = MOVE&nbsp;&nbsp;|&nbsp;&nbsp;OK/A = SELECT&nbsp;&nbsp;|&nbsp;&nbsp;B = CANCEL</div>
             </div>
         </div>
-        
-        <div class="controls" id="controls-hint">
-            <p>D-PAD/STICK | OK/PAD-START=START | RED/PAD-A=A | BACK/PAD-B=B | YELLOW/PAD-SEL=SEL | BLUE=MENU</p>
+
+        <div class="side-panel">
+            <div class="controls" id="controls-hint">
+                <div class="hint-line">D-PAD/STICK = MOVE</div>
+                <div class="hint-line">OK / PAD-A = A</div>
+                <div class="hint-line">PLAY-PAUSE / PAD-B = B</div>
+                <div class="hint-line">CH+ / PAD-SEL = SELECT</div>
+                <div class="hint-line">CH- / PAD-START = START</div>
+                <div class="hint-line">BACK = MENU</div>
+                <div class="hint-note">REMOTE B/SEL/START = TAP ONLY (NO HOLD). USE A GAMEPAD FOR GAMES THAT NEED HELD BUTTONS.</div>
+            </div>
         </div>
+        </div><!-- /main-row -->
 
         <!-- CONTROLES TÁCTILES — solo visibles en mobile -->
         <div class="touch-controls">
@@ -367,10 +443,12 @@
 
     if (isTizen && tizen.tvinputdevice) {
         // The D-pad (arrow keys) and OK/Enter work out of the box.
-        // Back and the colored remote buttons need to be registered
+        // The media/channel hard keys and Back need to be registered
         // explicitly, otherwise the platform intercepts them (Back in
-        // particular would otherwise close/exit the app).
-        ['Back', 'ColorF0Red', 'ColorF1Green', 'ColorF2Yellow', 'ColorF3Blue'].forEach(key => {
+        // particular would otherwise close/exit the app, CH+/- would
+        // change channel). MediaPlay/MediaPause cover remotes that have
+        // separate play and pause buttons instead of a combined one.
+        ['Back', 'MediaPlayPause', 'MediaPlay', 'MediaPause', 'ChannelUp', 'ChannelDown'].forEach(key => {
             try { tizen.tvinputdevice.registerKey(key); } catch (e) { console.warn('[TIZEN] registerKey failed for', key, e); }
         });
     }
@@ -379,11 +457,42 @@
     // no per-platform override needed anymore.
 
     // ============================================================
+    // 0b. FIT EMULATOR TO SCREEN
+    // The GameBoy case is laid out at a fixed pixel size (canvas is
+    // 640x576 plus the surrounding chrome). Scale the whole case as one
+    // unit so it fills the full screen height (clamped to the width on
+    // narrow/portrait displays). Scaling the entire case keeps the
+    // hardcoded-size overlays (ROM picker, game menu, server editor)
+    // perfectly aligned with the canvas.
+    // ============================================================
+    function fitCaseToScreen() {
+        const gbCase = document.querySelector('.gb-case');
+        if (!gbCase) return;
+        // offsetWidth/offsetHeight ignore the current transform, so this
+        // always measures the unscaled layout size.
+        const scale = Math.min(
+            window.innerHeight / gbCase.offsetHeight,
+            window.innerWidth  / gbCase.offsetWidth
+        );
+        gbCase.style.transform = 'scale(' + scale + ')';
+    }
+    window.addEventListener('resize', fitCaseToScreen);
+    window.addEventListener('load', fitCaseToScreen);
+    document.addEventListener('DOMContentLoaded', fitCaseToScreen);
+
+    // ============================================================
     // 1. GESTIÓN DE CARGA DE ROM
     // ============================================================
     const romNameDisplay = document.getElementById('rom-name');
 
-    function loadRomData(data, fileName) {
+    // Identity of the ROM currently running - used as the save-state key.
+    // currentRomData is kept so a failed state restore can reload the ROM
+    // fresh instead of leaving the emulator half-restored.
+    let currentRomName = null;
+    let currentRomData = null;
+    let gameLoaded = false;
+
+    async function loadRomData(data, fileName) {
         try {
             Module.FS.writeFile('/game.gb', data);
             console.log("[JS] ROM escrita en FS virtual: " + data.length + " bytes");
@@ -392,16 +501,49 @@
                 console.log("[JS] ROM cargada correctamente.");
                 romNameDisplay.innerText = "Playing: " + fileName;
                 romNameDisplay.style.color = "#008800";
+                currentRomName = fileName;
+                currentRomData = data;
+                gameLoaded = true;
                 initAudioOnInteraction();
+                // If this ROM has a saved state, offer to continue from it
+                await offerSavedStateRestore(fileName);
             } else {
                 console.error("[JS] C++ reporta fallo al cargar la ROM.");
                 romNameDisplay.innerText = "Error loading ROM";
                 romNameDisplay.style.color = "#cc0000";
+                gameLoaded = false;
+                currentRomName = null;
+                currentRomData = null;
             }
         } catch (err) {
             console.error("[JS] Error con Module:", err);
             romNameDisplay.innerText = "WASM Error (See Console)";
         }
+    }
+
+    // ============================================================
+    // DESKTOP ROM FILE PICKER
+    // On Tizen the button stays hidden - the TV has no pointer and loads
+    // ROMs from USB/Wi-Fi. A ROM picked before WASM finishes loading is
+    // parked in pendingDesktopRom and loaded from onRuntimeInitialized.
+    // ============================================================
+    let pendingDesktopRom = null;
+
+    if (!isTizen) {
+        document.getElementById('rom-upload-label').classList.add('desktop-visible');
+        document.getElementById('rom-upload').addEventListener('change', e => {
+            const file = e.target.files[0];
+            if (!file) return;
+            romNameDisplay.innerText = 'Loading: ' + file.name;
+            const reader = new FileReader();
+            reader.onload = ev => {
+                const data = new Uint8Array(ev.target.result);
+                if (Module.FS) loadRomData(data, file.name);
+                else pendingDesktopRom = { data, name: file.name };
+            };
+            reader.readAsArrayBuffer(file);
+            e.target.value = ''; // allow re-selecting the same file
+        });
     }
 
     // Auto-load the bundled example ROM on startup (used on Tizen TV where
@@ -486,6 +628,123 @@
         });
     }
 
+    // ============================================================
+    // WI-FI ROM DOWNLOAD + CACHE (no USB needed)
+    // "Download ROMs (Wi-Fi)" in the game menu fetches a ROM list from
+    // a small HTTP server on your PC (tools/serve-roms.py) and saves
+    // every ROM into the app's private writable storage on the TV
+    // (wgt-private/roms/). Saved ROMs show up in the picker alongside
+    // USB ones and keep working offline - the server only needs to run
+    // while downloading.
+    // Uses the Tizen 5.0+ FileSystemManager API (openFile/listDirectory),
+    // which handles binary data properly via Uint8Array.
+    // ============================================================
+    // Compile-time default only - the address can be changed on the TV via
+    // the game menu ("Set ROM Server", D-pad digit editor) and is then kept
+    // in localStorage, which persists in the app's private data.
+    const DEFAULT_ROM_SERVER_URL = 'http://192.168.101.192:8000'; // <- your PC's LAN IP
+    const ROM_SERVER_STORAGE_KEY = 'romServerUrl';
+    const CACHED_ROMS_DIR = 'wgt-private/roms';
+
+    function getRomServerUrl() {
+        try {
+            const saved = localStorage.getItem(ROM_SERVER_STORAGE_KEY);
+            if (saved) return saved;
+        } catch (e) { /* localStorage unavailable - fall through to default */ }
+        return DEFAULT_ROM_SERVER_URL;
+    }
+
+    function listDirectoryNames(path) {
+        return new Promise((resolve, reject) => {
+            tizen.filesystem.listDirectory(path, resolve, reject);
+        });
+    }
+
+    // Returns entries for every ROM previously downloaded to the TV.
+    async function findAllCachedRoms() {
+        if (!(isTizen && tizen.filesystem && tizen.filesystem.listDirectory)) return [];
+        try {
+            const names = await listDirectoryNames(CACHED_ROMS_DIR);
+            const roms = names
+                .filter(n => /\.(gb|gbc)$/i.test(n))
+                .map(n => ({ type: 'cached', name: n, path: CACHED_ROMS_DIR + '/' + n, storageLabel: 'saved' }));
+            console.log('[CACHE] Found', roms.length, 'saved ROM(s):', roms.map(r => r.name));
+            return roms;
+        } catch (err) {
+            // Directory doesn't exist yet (nothing downloaded) - not an error.
+            console.log('[CACHE] No saved ROMs yet:', err && err.message);
+            return [];
+        }
+    }
+
+    function writeCachedRom(path, data) {
+        const handle = tizen.filesystem.openFile(path, 'w');
+        try {
+            handle.writeData(data);
+        } finally {
+            handle.close();
+        }
+    }
+
+    function readCachedRom(path) {
+        const CHUNK = 1 << 16;
+        const handle = tizen.filesystem.openFile(path, 'r');
+        try {
+            const chunks = [];
+            let total = 0;
+            while (true) {
+                let chunk;
+                try {
+                    chunk = handle.readData(CHUNK);
+                } catch (e) {
+                    break; // EOF on some firmwares throws instead of returning empty
+                }
+                if (!chunk || chunk.length === 0) break;
+                chunks.push(chunk);
+                total += chunk.length;
+                if (chunk.length < CHUNK) break;
+            }
+            const out = new Uint8Array(total);
+            let offset = 0;
+            for (const c of chunks) { out.set(c, offset); offset += c.length; }
+            return out;
+        } finally {
+            handle.close();
+        }
+    }
+
+    // Fetches <server>/roms.json (array of file names), downloads each ROM
+    // and stores it in wgt-private/roms/. Overwrites same-named files, so
+    // re-running refreshes the collection.
+    async function downloadRomsFromServer() {
+        const serverUrl = getRomServerUrl();
+        romNameDisplay.innerText = 'Contacting ' + serverUrl + '...';
+        romNameDisplay.style.color = '#555';
+
+        const res = await fetch(serverUrl + '/roms.json');
+        if (!res.ok) throw new Error('Server answered HTTP ' + res.status);
+        const names = await res.json();
+        if (!Array.isArray(names) || names.length === 0) {
+            romNameDisplay.innerText = 'Server has no ROMs';
+            return 0;
+        }
+
+        try { tizen.filesystem.createDirectory(CACHED_ROMS_DIR); } catch (e) { /* already exists */ }
+
+        let done = 0;
+        for (const name of names) {
+            romNameDisplay.innerText = 'Downloading ' + name + ' (' + (done + 1) + '/' + names.length + ')...';
+            const r = await fetch(serverUrl + '/' + encodeURIComponent(name));
+            if (!r.ok) { console.warn('[CACHE] Skipping', name, '- HTTP', r.status); continue; }
+            const data = new Uint8Array(await r.arrayBuffer());
+            writeCachedRom(CACHED_ROMS_DIR + '/' + name, data);
+            console.log('[CACHE] Saved', name, '(' + data.length + ' bytes)');
+            done++;
+        }
+        romNameDisplay.innerText = 'Downloaded ' + done + ' ROM(s)';
+        return done;
+    }
+
     // Scans all mounted USB storages and returns every .gb File handle
     // found (with the storage label attached for display/debugging).
     // Only looks at the top level of each drive - extend with recursion
@@ -508,24 +767,31 @@
         return found;
     }
 
-    // Tries USB first, falls back to the bundled example ROM. If more than
-    // one ROM is found on USB, shows an on-screen picker instead of guessing.
+    // Reads the bytes of any ROM entry, regardless of where it lives.
+    async function readRomEntry(entry) {
+        if (entry.type === 'cached') return readCachedRom(entry.path);
+        return readFileAsBytes(entry.file);
+    }
+
+    // Tries USB + saved (Wi-Fi downloaded) ROMs first, falls back to the
+    // bundled example ROM. If more than one ROM is found, shows an
+    // on-screen picker instead of guessing.
     async function autoLoadRom() {
         if (isTizen) {
             try {
-                const usbRoms = await findAllUsbRoms();
-                if (usbRoms.length === 1) {
-                    const entry = usbRoms[0];
-                    romNameDisplay.innerText = 'Loading from USB: ' + entry.name;
-                    const data = await readFileAsBytes(entry.file);
+                const roms = (await findAllUsbRoms()).concat(await findAllCachedRoms());
+                if (roms.length === 1) {
+                    const entry = roms[0];
+                    romNameDisplay.innerText = 'Loading: ' + entry.name;
+                    const data = await readRomEntry(entry);
                     loadRomData(data, entry.name);
                     return;
-                } else if (usbRoms.length > 1) {
-                    showRomSelector(usbRoms, 'SELECT ROM (USB)');
+                } else if (roms.length > 1) {
+                    showRomSelector(roms, 'SELECT ROM');
                     return;
                 }
             } catch (err) {
-                console.warn('[USB] Scan/load failed, falling back to bundled ROM:', err);
+                console.warn('[ROM] Scan/load failed, falling back to bundled ROM:', err);
             }
         }
         autoLoadDefaultRom();
@@ -576,7 +842,7 @@
             if (entry.type === 'bundled') {
                 await autoLoadDefaultRom();
             } else {
-                const data = await readFileAsBytes(entry.file);
+                const data = await readRomEntry(entry);
                 loadRomData(data, entry.name);
             }
         } catch (err) {
@@ -586,13 +852,14 @@
         }
     }
 
-    // Re-scans USB and always shows the picker (even with 0/1 USB ROMs),
-    // with the bundled example ROM always offered as an extra option.
-    // Used by the in-game "Change ROM" menu entry.
+    // Re-scans USB + saved ROMs and always shows the picker (even with 0/1
+    // ROMs found), with the bundled example ROM always offered as an extra
+    // option. Used by the in-game "Change ROM" menu entry.
     async function openRomChangeMenu() {
         let entries = [];
         if (isTizen) {
-            try { entries = await findAllUsbRoms(); } catch (err) { console.warn('[USB] Rescan failed:', err); }
+            try { entries = entries.concat(await findAllUsbRoms()); } catch (err) { console.warn('[USB] Rescan failed:', err); }
+            try { entries = entries.concat(await findAllCachedRoms()); } catch (err) { console.warn('[CACHE] Rescan failed:', err); }
         }
         entries = entries.concat([{ type: 'bundled', name: 'examples.gb (bundled)' }]);
         showRomSelector(entries, 'CHANGE ROM');
@@ -616,12 +883,237 @@
     }
 
     // ============================================================
-    // GAME MENU (Resume / Change ROM / Exit App)
+    // CONFIRM DIALOG
+    // Generic promise-based question overlay, navigated with the D-pad
+    // like the other overlays. Resolves with the chosen option's label,
+    // or null when cancelled with B.
+    // ============================================================
+    let confirmActive = false;
+    let confirmOptions = [];
+    let confirmIndex = 0;
+    let confirmResolve = null;
+
+    function renderConfirmDialog() {
+        const list = document.getElementById('confirm-list');
+        list.innerHTML = confirmOptions.map((label, i) =>
+            `<div class="rom-select-item${i === confirmIndex ? ' selected' : ''}">${label}</div>`
+        ).join('');
+    }
+
+    function showConfirmDialog(title, message, options) {
+        return new Promise(resolve => {
+            // Never stack dialogs - treat a still-pending one as cancelled
+            if (confirmResolve) confirmResolve(null);
+            confirmOptions = options;
+            confirmIndex = 0;
+            confirmActive = true;
+            confirmResolve = resolve;
+            document.getElementById('confirm-title').textContent = title;
+            document.getElementById('confirm-message').textContent = message;
+            document.getElementById('confirm-overlay').classList.add('visible');
+            renderConfirmDialog();
+        });
+    }
+
+    function closeConfirmDialog(choice) {
+        confirmActive = false;
+        document.getElementById('confirm-overlay').classList.remove('visible');
+        const resolve = confirmResolve;
+        confirmResolve = null;
+        if (resolve) resolve(choice);
+    }
+
+    // Handles a GB button id while a confirm dialog is open. Returns true
+    // if it consumed the press (same swallow-on-keyup pattern as the others).
+    function handleConfirmDialogInput(id, down) {
+        if (!confirmActive || !down) return confirmActive;
+
+        if (id === 2) { // UP
+            confirmIndex = (confirmIndex - 1 + confirmOptions.length) % confirmOptions.length;
+            renderConfirmDialog();
+        } else if (id === 3) { // DOWN
+            confirmIndex = (confirmIndex + 1) % confirmOptions.length;
+            renderConfirmDialog();
+        } else if (id === 4 || id === 7) { // A or START -> confirm
+            closeConfirmDialog(confirmOptions[confirmIndex]);
+        } else if (id === 5) { // B -> cancel
+            closeConfirmDialog(null);
+        }
+        return true;
+    }
+
+    // ============================================================
+    // SAVE STATES
+    // The C++ core serializes the full machine state (CPU, memory,
+    // PPU, timer, APU, cartridge RAM + mapper) into a byte blob.
+    // Persistence: a file in the app's private storage on Tizen
+    // (wgt-private/states/), localStorage (base64) in browsers.
+    // Keyed by ROM file name; one slot per ROM.
+    // ============================================================
+    const SAVE_STATES_DIR = 'wgt-private/states';
+    const SAVE_STATE_KEY_PREFIX = 'gbSaveState:';
+
+    function canUseTizenFs() {
+        return isTizen && tizen.filesystem && !!tizen.filesystem.openFile;
+    }
+
+    function saveStateFilePath(romName) {
+        return SAVE_STATES_DIR + '/' + romName.replace(/[^\w.-]/g, '_') + '.state';
+    }
+
+    function bytesToBase64(bytes) {
+        let bin = '';
+        const CHUNK = 0x8000;
+        for (let i = 0; i < bytes.length; i += CHUNK) {
+            bin += String.fromCharCode.apply(null, bytes.subarray(i, i + CHUNK));
+        }
+        return btoa(bin);
+    }
+
+    function base64ToBytes(b64) {
+        const bin = atob(b64);
+        const out = new Uint8Array(bin.length);
+        for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+        return out;
+    }
+
+    function persistSavedState(romName, bytes) {
+        if (canUseTizenFs()) {
+            try { tizen.filesystem.createDirectory(SAVE_STATES_DIR); } catch (e) { /* already exists */ }
+            const handle = tizen.filesystem.openFile(saveStateFilePath(romName), 'w');
+            try { handle.writeData(bytes); } finally { handle.close(); }
+        } else {
+            localStorage.setItem(SAVE_STATE_KEY_PREFIX + romName, bytesToBase64(bytes));
+        }
+    }
+
+    // Returns the saved state bytes for a ROM, or null if there are none.
+    function readSavedState(romName) {
+        if (canUseTizenFs()) {
+            try {
+                return readCachedRom(saveStateFilePath(romName)); // generic binary file reader
+            } catch (err) {
+                return null; // no state saved yet
+            }
+        }
+        try {
+            const b64 = localStorage.getItem(SAVE_STATE_KEY_PREFIX + romName);
+            return b64 ? base64ToBytes(b64) : null;
+        } catch (e) {
+            return null;
+        }
+    }
+
+    // Transient status line under the cartridge slot, reverts to
+    // "Playing: <rom>" a few seconds later.
+    let statusResetTimer = null;
+    function showStatus(text, color) {
+        romNameDisplay.innerText = text;
+        romNameDisplay.style.color = color || '#555';
+        clearTimeout(statusResetTimer);
+        statusResetTimer = setTimeout(() => {
+            if (gameLoaded && currentRomName) {
+                romNameDisplay.innerText = 'Playing: ' + currentRomName;
+                romNameDisplay.style.color = '#008800';
+            }
+        }, 3000);
+    }
+
+    // Snapshot the running game and persist it. Returns true on success.
+    function doSaveState() {
+        if (!gameLoaded || !currentRomName) {
+            showStatus('No game running', '#cc0000');
+            return false;
+        }
+        try {
+            const size = Module._save_state();
+            if (!size) throw new Error('save_state() returned 0');
+            const ptr = Module._get_state_data();
+            const bytes = Module.HEAPU8.slice(ptr, ptr + size);
+            persistSavedState(currentRomName, bytes);
+            console.log('[STATE] Saved', size, 'bytes for', currentRomName);
+            showStatus('State saved', '#008800');
+            return true;
+        } catch (err) {
+            console.error('[STATE] Save failed:', err);
+            showStatus('Save state failed', '#cc0000');
+            return false;
+        }
+    }
+
+    // Push previously saved bytes into the running emulator.
+    function applySavedState(bytes) {
+        try {
+            const ptr = Module._malloc(bytes.length);
+            Module.HEAPU8.set(bytes, ptr);
+            const ok = Module._load_state(ptr, bytes.length);
+            Module._free(ptr);
+            if (!ok) throw new Error('C++ rejected the state');
+            showStatus('State restored', '#008800');
+            return true;
+        } catch (err) {
+            console.error('[STATE] Restore failed:', err);
+            // A partially applied state can leave the machine inconsistent -
+            // reload the ROM from scratch so the game at least boots cleanly.
+            if (currentRomData) {
+                try {
+                    Module.FS.writeFile('/game.gb', currentRomData);
+                    Module.ccall('load_rom_from_js', 'number', ['string'], ['/game.gb']);
+                } catch (e) {
+                    console.error('[STATE] ROM reload after failed restore also failed:', e);
+                }
+            }
+            showStatus('Restore failed - started fresh', '#cc0000');
+            return false;
+        }
+    }
+
+    // "Load State" menu entry: warns that current progress is discarded.
+    async function restoreSavedStateWithConfirm() {
+        if (!gameLoaded || !currentRomName) {
+            showStatus('No game running', '#cc0000');
+            return;
+        }
+        const saved = readSavedState(currentRomName);
+        if (!saved) {
+            showStatus('No saved state for this game', '#cc0000');
+            return;
+        }
+        const choice = await showConfirmDialog('LOAD STATE',
+            'Discard current progress and restore the saved state?',
+            ['Restore saved state', 'Cancel']);
+        if (choice === 'Restore saved state') applySavedState(saved);
+    }
+
+    // Called right after a ROM boots: offer to continue from its saved state.
+    async function offerSavedStateRestore(romName) {
+        const saved = readSavedState(romName);
+        if (!saved) return;
+        const choice = await showConfirmDialog('SAVED STATE FOUND',
+            'Continue from your saved state?',
+            ['Continue saved state', 'Start from beginning']);
+        if (choice === 'Continue saved state') applySavedState(saved);
+    }
+
+    // Before leaving the running game (Change ROM / Exit App): offer to
+    // save first. Returns true if the caller should proceed, false if the
+    // user cancelled (or saving failed - don't silently lose progress).
+    async function confirmSaveBeforeLeaving(actionLabel) {
+        if (!gameLoaded || !currentRomName) return true; // nothing to lose
+        const choice = await showConfirmDialog('SAVE STATE?',
+            'Save your progress before ' + actionLabel + '?',
+            ['Save', 'Discard', 'Cancel']);
+        if (choice === 'Save') return doSaveState();
+        return choice === 'Discard';
+    }
+
+    // ============================================================
+    // GAME MENU (Resume / Save/Load State / Change ROM / Exit App)
     // Opened with the Blue remote button, or SELECT+START held together
     // on a gamepad. Lets you back out of a running ROM without having to
     // restart the whole app.
     // ============================================================
-    const GAME_MENU_OPTIONS = ['Resume', 'Change ROM (USB)', 'Exit App'];
+    const GAME_MENU_OPTIONS = ['Resume', 'Save State', 'Load State', 'Change ROM', 'Download ROMs (Wi-Fi)', 'Set ROM Server', 'Exit App'];
     let gameMenuActive = false;
     let gameMenuIndex  = 0;
 
@@ -633,7 +1125,7 @@
     }
 
     function openGameMenu() {
-        if (romSelectActive) return; // don't stack over the ROM picker
+        if (romSelectActive || serverConfigActive || confirmActive) return; // don't stack over the ROM picker / server editor / a dialog
         gameMenuActive = true;
         gameMenuIndex = 0;
         document.getElementById('game-menu-overlay').classList.add('visible');
@@ -665,12 +1157,133 @@
         const choice = GAME_MENU_OPTIONS[gameMenuIndex];
         if (choice === 'Resume') {
             closeGameMenu();
-        } else if (choice === 'Change ROM (USB)') {
+        } else if (choice === 'Save State') {
             closeGameMenu();
-            await openRomChangeMenu();
+            doSaveState();
+        } else if (choice === 'Load State') {
+            closeGameMenu();
+            await restoreSavedStateWithConfirm();
+        } else if (choice === 'Change ROM') {
+            closeGameMenu();
+            if (await confirmSaveBeforeLeaving('changing ROM')) {
+                await openRomChangeMenu();
+            }
+        } else if (choice === 'Download ROMs (Wi-Fi)') {
+            closeGameMenu();
+            try {
+                const count = await downloadRomsFromServer();
+                // The picker loads a new ROM, so this path also discards
+                // the running game - same save-first offer as "Change ROM".
+                if (count > 0 && await confirmSaveBeforeLeaving('changing ROM')) {
+                    await openRomChangeMenu();
+                }
+            } catch (err) {
+                console.error('[CACHE] Download failed:', err);
+                romNameDisplay.innerText = 'Download failed (is the server on?)';
+                romNameDisplay.style.color = '#cc0000';
+            }
+        } else if (choice === 'Set ROM Server') {
+            closeGameMenu();
+            openServerConfig();
         } else if (choice === 'Exit App') {
-            exitApp();
+            closeGameMenu();
+            if (await confirmSaveBeforeLeaving('exiting')) {
+                exitApp();
+            }
         }
+    }
+
+    // ============================================================
+    // ROM SERVER ADDRESS EDITOR
+    // Opened via "Set ROM Server" in the game menu. Edits the server
+    // IP + port digit by digit with the D-pad (LEFT/RIGHT = move,
+    // UP/DOWN = change digit, OK/A = save, B = cancel) and persists
+    // the result in localStorage - no rebuild needed when the PC's
+    // LAN IP changes.
+    // ============================================================
+    let serverConfigActive = false;
+    let serverDigits = [];      // 12 IP digits followed by 5 port digits
+    let serverDigitIndex = 0;
+
+    function urlToDigits(url) {
+        const m = /^https?:\/\/(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3}):(\d{1,5})/.exec(url) || [];
+        const octets = [m[1], m[2], m[3], m[4]].map(v => Math.min(255, parseInt(v || '0', 10) || 0));
+        const port = Math.min(65535, parseInt(m[5] || '8000', 10) || 8000);
+        const digits = [];
+        octets.forEach(o => String(o).padStart(3, '0').split('').forEach(d => digits.push(+d)));
+        String(port).padStart(5, '0').split('').forEach(d => digits.push(+d));
+        return digits;
+    }
+
+    function digitsToUrl(digits) {
+        const octets = [];
+        for (let i = 0; i < 4; i++) {
+            octets.push(Math.min(255, +digits.slice(i * 3, i * 3 + 3).join('')));
+        }
+        const port = Math.min(65535, Math.max(1, +digits.slice(12).join('')));
+        return 'http://' + octets.join('.') + ':' + port;
+    }
+
+    function renderServerConfig() {
+        let html = 'http://';
+        serverDigits.forEach((d, i) => {
+            if (i === 3 || i === 6 || i === 9) html += '.';
+            if (i === 12) html += ':';
+            const style = i === serverDigitIndex
+                ? 'background:#5a5;color:#000;padding:1px 2px;border-radius:2px;'
+                : 'padding:1px 2px;';
+            html += `<span style="${style}">${d}</span>`;
+        });
+        document.getElementById('server-config-value').innerHTML = html;
+    }
+
+    function openServerConfig() {
+        serverDigits = urlToDigits(getRomServerUrl());
+        serverDigitIndex = 0;
+        serverConfigActive = true;
+        document.getElementById('server-config-overlay').classList.add('visible');
+        renderServerConfig();
+    }
+
+    function closeServerConfig(save) {
+        serverConfigActive = false;
+        document.getElementById('server-config-overlay').classList.remove('visible');
+        if (!save) return;
+        const url = digitsToUrl(serverDigits);
+        try {
+            localStorage.setItem(ROM_SERVER_STORAGE_KEY, url);
+        } catch (e) {
+            console.warn('[CONFIG] Could not persist server URL:', e);
+        }
+        console.log('[CONFIG] ROM server set to', url);
+        romNameDisplay.innerText = 'ROM server: ' + url;
+        romNameDisplay.style.color = '#555';
+    }
+
+    // Handles a GB button id while the server address editor is open.
+    // Returns true if it consumed the press (same swallow-on-keyup
+    // pattern as the ROM picker).
+    function handleServerConfigInput(id, down) {
+        if (!serverConfigActive || !down) return serverConfigActive;
+
+        if (id === 1) { // LEFT
+            serverDigitIndex = (serverDigitIndex - 1 + serverDigits.length) % serverDigits.length;
+            renderServerConfig();
+        } else if (id === 0) { // RIGHT
+            serverDigitIndex = (serverDigitIndex + 1) % serverDigits.length;
+            renderServerConfig();
+        } else if (id === 2) { // UP
+            serverDigits[serverDigitIndex] = (serverDigits[serverDigitIndex] + 1) % 10;
+            renderServerConfig();
+        } else if (id === 3) { // DOWN
+            serverDigits[serverDigitIndex] = (serverDigits[serverDigitIndex] + 9) % 10;
+            renderServerConfig();
+        } else if (id === 4 || id === 7) { // A or START -> save
+            closeServerConfig(true);
+        } else if (id === 5) { // B -> cancel
+            closeServerConfig(false);
+        }
+        return true;
     }
 
     // Handles a GB button id while the game menu is open. Returns true if
@@ -776,8 +1389,10 @@
     function pressBtn(id, down) {
         id = parseInt(id);
 
-        // While the USB ROM picker or game menu is open, D-pad/A/START
-        // navigate those instead of controlling the emulator.
+        // While a confirm dialog, the ROM picker, game menu or server address
+        // editor is open, D-pad/A/START navigate those instead of the emulator.
+        if (handleConfirmDialogInput(id, down)) return;
+        if (handleServerConfigInput(id, down)) return;
         if (handleRomSelectorInput(id, down)) return;
         if (handleGameMenuInput(id, down)) return;
 
@@ -798,24 +1413,77 @@
     // ============================================================
     // 5. INPUT DE TECLADO (+ mando a distancia Tizen)
     // ============================================================
+    // Enter is the A button on every platform: on the TV it's the OK key
+    // (the most comfortable key on the remote, and A is pressed constantly),
+    // and keeping desktop identical avoids per-platform surprises. START
+    // lives on Right Shift for desktop (SELECT on Left Shift).
     const KEY_MAP = {
         'ArrowRight':0, 'ArrowLeft':1, 'ArrowUp':2, 'ArrowDown':3,
-        'KeyZ':4, 'KeyX':5, 'ShiftLeft':6, 'Enter':7
+        'KeyZ':4, 'KeyX':5, 'ShiftLeft':6, 'ShiftRight':7, 'Enter':4
     };
 
-    // Physical TV remotes don't have Z/X/Shift keys. The D-pad and OK
-    // (which reports as 'Enter', already mapped to START above) work out
-    // of the box; Back and the colored buttons need their own mapping.
-    // Adjust to taste - these are just sensible defaults.
+    // TV remotes only have a handful of hard keys, so the frequently-used
+    // GB buttons go on the easiest-to-reach ones. The colored (RGYB) keys
+    // are avoided on purpose: on current Samsung remotes they're virtual
+    // (buried in an on-screen panel), not physical buttons.
     const TIZEN_KEYCODE_MAP = {
-        10009: 5,   // Back          -> B
-        403:   4,   // Red (F0)      -> A
-        405:   6,   // Yellow (F2)   -> SELECT
+        10252: 5,   // Play/Pause    -> B
+        415:   5,   // Play          -> B (remotes with separate play/pause)
+        19:    5,   // Pause         -> B (remotes with separate play/pause)
+        427:   6,   // Channel Up    -> SELECT
+        428:   7,   // Channel Down  -> START
     };
 
     // Not a GB button - opens/closes the game menu (Resume/Change ROM/Exit).
-    // 406 = Blue (F3) on the TV remote, 8 = Backspace for desktop testing.
-    const MENU_TOGGLE_KEYCODES = new Set([406, 8]);
+    // 10009 = Back on the TV remote, 8 = Backspace for desktop testing.
+    const MENU_TOGGLE_KEYCODES = new Set([10009, 8]);
+
+    // The remote's media/channel keys don't behave like held keyboard keys:
+    // a physical press arrives as an instantaneous keydown+keyup pair (or
+    // the keyup is unreliable). Games poll the joypad register once per
+    // frame, so a ~0ms press falls between polls and is silently dropped -
+    // that's why these keys felt laggy in-game while the JS menus (which
+    // react to the keydown event itself) were instant. Fix: ignore keyup
+    // for these keys and synthesize the press instead - press on keydown,
+    // auto-release PULSE ms later so every click spans several frames. A
+    // repeated click mid-pulse releases for GAP ms first, so the game sees
+    // a fresh edge even when mashing faster than the pulse length.
+    const REMOTE_PULSE_MS  = 120; // ~7 frames held down
+    const REMOTE_GAP_MS    = 40;  // ~2 frames released between rapid clicks
+    const REMOTE_DEDUP_MS  = 30;  // two codes for one click (e.g. 415+10252)
+    const remotePulse = {};       // btn id -> {phase: 'down'|'gap', timer, t}
+
+    // Release that bypasses pressBtn's overlay routing: if an overlay
+    // opened mid-pulse it would swallow the delayed release and leave the
+    // button stuck down in the joypad register. Releasing directly is
+    // always safe - overlays ignore releases anyway.
+    function releaseBtnDirect(id) {
+        if (!buttonState[id]) return;
+        buttonState[id] = false;
+        if (Module._set_button) Module._set_button(id, 0);
+        updateDebugUI();
+    }
+
+    function remoteClick(id) {
+        const p = remotePulse[id];
+        if (p && p.phase === 'down' && performance.now() - p.t < REMOTE_DEDUP_MS) {
+            return; // duplicate keycode for the same physical click
+        }
+        if (p) clearTimeout(p.timer);
+        if (p && p.phase === 'down') {
+            releaseBtnDirect(id);
+            remotePulse[id] = { phase: 'gap', timer: setTimeout(() => {
+                delete remotePulse[id];
+                remoteClick(id);
+            }, REMOTE_GAP_MS) };
+            return;
+        }
+        pressBtn(id, true);
+        remotePulse[id] = { phase: 'down', t: performance.now(), timer: setTimeout(() => {
+            delete remotePulse[id];
+            releaseBtnDirect(id);
+        }, REMOTE_PULSE_MS) };
+    }
 
     function setupKeyboard() {
         const handler = (e, isDown) => {
@@ -829,7 +1497,7 @@
             if (btn !== undefined) { e.preventDefault(); pressBtn(btn, isDown); return; }
 
             const tizenBtn = TIZEN_KEYCODE_MAP[e.keyCode];
-            if (tizenBtn !== undefined) { e.preventDefault(); pressBtn(tizenBtn, isDown); }
+            if (tizenBtn !== undefined) { e.preventDefault(); if (isDown) remoteClick(tizenBtn); }
         };
         document.addEventListener('keydown', e => handler(e, true));
         document.addEventListener('keyup',   e => handler(e, false));
@@ -995,7 +1663,13 @@
             console.log("[WASM] Inicializado. Esperando ROM...");
             setupKeyboard();
             setupTouchInput();
-            autoLoadRom(); // USB zuerst, sonst Cartucho de ejemplo empaquetado
+            if (pendingDesktopRom) {
+                // The user already picked a file - don't auto-load over it
+                loadRomData(pendingDesktopRom.data, pendingDesktopRom.name);
+                pendingDesktopRom = null;
+            } else {
+                autoLoadRom(); // USB zuerst, sonst Cartucho de ejemplo empaquetado
+            }
         }
     };
 

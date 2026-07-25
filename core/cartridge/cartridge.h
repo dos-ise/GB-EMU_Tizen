@@ -14,8 +14,13 @@ public:
     uint8_t  readCartridge(uint16_t address);
     void     writeCartridge(uint16_t address, uint8_t value);
 
+    // Save states: RAM externa + registros del MBC
+    void saveState(StateWriter& out) const;
+    void loadState(StateReader& in);
+
     const std::string& getTitle()         const { return Title; }
     uint8_t            getCartridgeType() const { return cartridge_type; }
+    uint8_t            getCGBFlag()       const { return cgb_flag; }
     bool               isLoaded()         const { return !ROM.empty() && mbc != nullptr; }
 
 private:
@@ -29,6 +34,7 @@ private:
     // Metadata del header
     std::string Title;
     uint8_t     cartridge_type  = 0;
+    uint8_t     cgb_flag        = 0;   // 0x143: 0x80 = CGB compatible, 0xC0 = CGB only
     uint8_t     ROM_type        = 0;
     uint8_t     RAM_type        = 0;
     uint16_t    rom_banks_count = 2;

@@ -196,16 +196,39 @@ void ppu::update_stat_interrupt()
 }
 
 // ============================================================
+// COLOR CGB: convertir RGB555 de palette RAM a ABGR de 32 bits
+// ============================================================
+uint32_t ppu::cgb_color(const uint8_t* pal_ram, int pal, int color_num)
+{
+    int idx = pal * 8 + color_num * 2;
+    uint16_t raw = pal_ram[idx] | (pal_ram[idx + 1] << 8);
+
+    uint8_t r = raw & 0x1F;
+    uint8_t g = (raw >> 5) & 0x1F;
+    uint8_t b = (raw >> 10) & 0x1F;
+
+    // Expandir 5 bits a 8 (replicando los bits altos)
+    uint8_t r8 = (r << 3) | (r >> 2);
+    uint8_t g8 = (g << 3) | (g >> 2);
+    uint8_t b8 = (b << 3) | (b >> 2);
+
+    return 0xFF000000u | (b8 << 16) | (g8 << 8) | r8;
+}
+
+// ============================================================
 // DRAW SCANLINE
 // ============================================================
 void ppu::draw_scanline()
 {
     uint8_t lcdc = memory.IO[0x40];
     uint8_t ly   = current_line;
+    bool    cgb  = memory.cgb_mode;
+
+    uint32_t blank = cgb ? 0xFFFFFFFFu : palette[0];
 
     if (!(lcdc & 0x80)) {
         for (int x = 0; x < 160; x++) {
-            gfx[ly * 160 + x] = palette[0];
+            gfx[ly * 160 + x] = blank;
             bg_priority[x]    = 0;
         }
         return;
@@ -214,11 +237,12 @@ void ppu::draw_scanline()
     // Inicializar prioridad de BG a 0
     for (int x = 0; x < 160; x++) {
         bg_priority[x] = 0;
-        gfx[ly * 160 + x] = palette[0];
+        gfx[ly * 160 + x] = blank;
     }
 
-    // Bit 0 LCDC: BG + Window habilitados (en DMG, controla ambos)
-    if (lcdc & 0x01)
+    // Bit 0 LCDC: en DMG habilita BG+Window; en CGB el BG siempre se
+    // dibuja y el bit 0 solo controla la prioridad frente a los sprites.
+    if ((lcdc & 0x01) || cgb)
     {
         draw_background();
         draw_window();     // ← ANTES solo era un TODO
@@ -244,6 +268,7 @@ void ppu::draw_background()
     uint16_t tile_map_base       = (lcdc & 0x08) ? 0x9C00 : 0x9800;
     bool     signed_tile_addr    = !(lcdc & 0x10);
 
+    bool     cgb      = memory.cgb_mode;
     uint8_t  y_pos    = scy + ly;
     uint16_t tile_row = (y_pos / 8) * 32;
 
@@ -253,8 +278,14 @@ void ppu::draw_background()
         uint16_t tile_col = x_pos / 8;
         uint16_t map_addr = tile_map_base + tile_row + tile_col;
 
-        // Leer tile ID de VRAM
+        // Leer tile ID de VRAM (banco 0)
         uint8_t tile_id = memory.VRAM[map_addr - 0x8000];
+
+        // CGB: atributos del tile en el banco 1 de VRAM, misma dirección
+        uint8_t attr      = cgb ? memory.VRAM[0x2000 + (map_addr - 0x8000)] : 0;
+        int     tile_bank = (attr >> 3) & 1;
+        bool    x_flip    = (attr & 0x20) != 0;
+        bool    y_flip    = (attr & 0x40) != 0;
 
         // Calcular dirección de datos del tile
         uint16_t tile_data_base;
@@ -264,25 +295,34 @@ void ppu::draw_background()
             tile_data_base = 0x8000 + (uint16_t)tile_id * 16;
 
         // Línea dentro del tile (0-7), 2 bytes por línea
-        uint8_t tile_line = (y_pos % 8) * 2;
+        uint8_t line_in_tile = y_pos % 8;
+        if (y_flip) line_in_tile = 7 - line_in_tile;
+        uint8_t tile_line = line_in_tile * 2;
 
-        // Bounds check VRAM (8KB = 0x2000 bytes)
-        uint32_t vram_offset = (uint32_t)(tile_data_base - 0x8000) + tile_line;
-        if (vram_offset + 1 >= memory.VRAM.size()) {
-            gfx[ly * 160 + x] = palette[0];
+        // Bounds check dentro del banco (8KB)
+        uint32_t bank_offset = (uint32_t)(tile_data_base - 0x8000) + tile_line;
+        if (bank_offset + 1 >= 0x2000) {
+            gfx[ly * 160 + x] = cgb ? 0xFFFFFFFFu : palette[0];
             bg_priority[x]    = 0;
             continue;
         }
+        uint32_t vram_offset = (uint32_t)tile_bank * 0x2000u + bank_offset;
 
         uint8_t lo = memory.VRAM[vram_offset];
         uint8_t hi = memory.VRAM[vram_offset + 1];
 
-        int color_bit = 7 - (x_pos % 8);
+        int color_bit = x_flip ? (x_pos % 8) : (7 - (x_pos % 8));
         int color_num = (((hi >> color_bit) & 1) << 1) | ((lo >> color_bit) & 1);
-        int color     = (bgp >> (color_num * 2)) & 0x03;
 
-        gfx[ly * 160 + x] = palette[color];
-        bg_priority[x]     = color_num;
+        if (cgb) {
+            gfx[ly * 160 + x] = cgb_color(memory.BG_PAL.data(), attr & 0x07, color_num);
+            // Bits 0-1: color del BG; bit 7: prioridad BG del atributo
+            bg_priority[x]    = (uint8_t)color_num | (attr & 0x80);
+        } else {
+            int color = (bgp >> (color_num * 2)) & 0x03;
+            gfx[ly * 160 + x] = palette[color];
+            bg_priority[x]     = color_num;
+        }
     }
 }
 
@@ -323,6 +363,8 @@ void ppu::draw_window()
 
     bool window_drawn_this_line = false;
 
+    bool cgb = memory.cgb_mode;
+
     for (int screen_x = screen_x_start; screen_x < 160; screen_x++)
     {
         // Posición dentro de la Window
@@ -333,6 +375,12 @@ void ppu::draw_window()
 
         uint8_t tile_id = memory.VRAM[map_addr - 0x8000];
 
+        // CGB: atributos del tile en el banco 1 de VRAM
+        uint8_t attr      = cgb ? memory.VRAM[0x2000 + (map_addr - 0x8000)] : 0;
+        int     tile_bank = (attr >> 3) & 1;
+        bool    x_flip    = (attr & 0x20) != 0;
+        bool    y_flip    = (attr & 0x40) != 0;
+
         // Dirección de datos del tile (mismo método que BG)
         uint16_t tile_data_base;
         if (signed_tile_addr)
@@ -340,18 +388,26 @@ void ppu::draw_window()
         else
             tile_data_base = 0x8000 + (uint16_t)tile_id * 16;
 
-        uint32_t vram_offset = (uint32_t)(tile_data_base - 0x8000) + tile_y * 2;
-        if (vram_offset + 1 >= memory.VRAM.size()) continue;
+        uint8_t line_in_tile = y_flip ? (7 - tile_y) : tile_y;
+
+        uint32_t bank_offset = (uint32_t)(tile_data_base - 0x8000) + line_in_tile * 2;
+        if (bank_offset + 1 >= 0x2000) continue;
+        uint32_t vram_offset = (uint32_t)tile_bank * 0x2000u + bank_offset;
 
         uint8_t lo = memory.VRAM[vram_offset];
         uint8_t hi = memory.VRAM[vram_offset + 1];
 
-        int color_bit = 7 - (win_x % 8);
+        int color_bit = x_flip ? (win_x % 8) : (7 - (win_x % 8));
         int color_num = (((hi >> color_bit) & 1) << 1) | ((lo >> color_bit) & 1);
-        int color     = (bgp >> (color_num * 2)) & 0x03;
 
-        gfx[ly * 160 + screen_x] = palette[color];
-        bg_priority[screen_x]    = color_num;  // Para prioridad de sprites sobre Window
+        if (cgb) {
+            gfx[ly * 160 + screen_x] = cgb_color(memory.BG_PAL.data(), attr & 0x07, color_num);
+            bg_priority[screen_x]    = (uint8_t)color_num | (attr & 0x80);
+        } else {
+            int color = (bgp >> (color_num * 2)) & 0x03;
+            gfx[ly * 160 + screen_x] = palette[color];
+            bg_priority[screen_x]    = color_num;  // Para prioridad de sprites sobre Window
+        }
 
         window_drawn_this_line = true;
     }
@@ -391,11 +447,15 @@ void ppu::draw_sprites()
         }
     }
 
-    // Ordenar por X (menor X = mayor prioridad en DMG)
-    for (int i = 0; i < sprites_on_line - 1; i++)
-        for (int j = i + 1; j < sprites_on_line; j++)
-            if (line_sprites[j].x < line_sprites[i].x)
-                std::swap(line_sprites[i], line_sprites[j]);
+    bool cgb = memory.cgb_mode;
+
+    // Ordenar por X (menor X = mayor prioridad en DMG).
+    // En CGB la prioridad es solo por índice de OAM (orden original).
+    if (!cgb)
+        for (int i = 0; i < sprites_on_line - 1; i++)
+            for (int j = i + 1; j < sprites_on_line; j++)
+                if (line_sprites[j].x < line_sprites[i].x)
+                    std::swap(line_sprites[i], line_sprites[j]);
 
     // Renderizar en orden inverso (mayor prioridad encima)
     for (int s = sprites_on_line - 1; s >= 0; s--)
@@ -422,13 +482,19 @@ void ppu::draw_sprites()
         }
 
         // Sprites siempre usan 0x8000 (unsigned)
-        uint32_t tile_addr = (uint32_t)actual_tile * 16 + (uint32_t)tile_y * 2;
+        // CGB: bit 3 de flags selecciona el banco de VRAM del tile
+        int      tile_bank = cgb ? ((flags >> 3) & 1) : 0;
+        uint32_t tile_addr = (uint32_t)tile_bank * 0x2000u
+                           + (uint32_t)actual_tile * 16 + (uint32_t)tile_y * 2;
         if (tile_addr + 1 >= memory.VRAM.size()) continue;
 
         uint8_t lo = memory.VRAM[tile_addr];
         uint8_t hi = memory.VRAM[tile_addr + 1];
 
         uint8_t pal_data = use_obp1 ? obp1 : obp0;
+
+        // CGB: LCDC bit 0 = 0 → los sprites siempre ganan al BG
+        bool bg_master_priority = !cgb || (lcdc & 0x01);
 
         for (int px = 0; px < 8; px++)
         {
@@ -440,11 +506,19 @@ void ppu::draw_sprites()
 
             if (color_num == 0) continue;  // Transparente
 
-            // Prioridad: si el sprite está detrás del BG y el BG no es color 0
-            if (priority && bg_priority[screen_x] != 0) continue;
+            // Prioridad: el BG gana si su pixel no es color 0 Y lo pide el
+            // flag del sprite o (en CGB) el bit de prioridad del atributo BG.
+            int  bg_color   = bg_priority[screen_x] & 0x03;
+            bool bg_wants   = priority || (cgb && (bg_priority[screen_x] & 0x80));
+            if (bg_master_priority && bg_wants && bg_color != 0) continue;
 
-            int color = (pal_data >> (color_num * 2)) & 0x03;
-            gfx[ly * 160 + screen_x] = palette[color];
+            if (cgb) {
+                gfx[ly * 160 + screen_x] =
+                    cgb_color(memory.OBJ_PAL.data(), flags & 0x07, color_num);
+            } else {
+                int color = (pal_data >> (color_num * 2)) & 0x03;
+                gfx[ly * 160 + screen_x] = palette[color];
+            }
         }
     }
 }
@@ -462,4 +536,34 @@ bool ppu::can_access_oam() const
 {
     if (!(memory.readMemory(0xFF40) & 0x80)) return true;
     return (current_mode == 0 || current_mode == 1);
+}
+// ============================================================
+// SAVE STATES
+// ============================================================
+// El framebuffer (gfx) también se guarda para que al restaurar
+// se vea inmediatamente el frame de la partida guardada.
+void ppu::saveState(StateWriter& out) const {
+    out.write(frame_complete);
+    out.write(current_mode);
+    out.write(current_line);
+    out.write(dots_counter);
+    out.write(scanline_dots);
+    out.write(prev_stat_line);
+    out.write(vblank_irq_fired);
+    out.write(window_line_counter);
+    out.writeBytes(bg_priority, sizeof(bg_priority));
+    out.writeBytes(gfx.data(), gfx.size() * sizeof(uint32_t));
+}
+
+void ppu::loadState(StateReader& in) {
+    frame_complete      = in.read<bool>();
+    current_mode        = in.read<int>();
+    current_line        = in.read<int>();
+    dots_counter        = in.read<int>();
+    scanline_dots       = in.read<int>();
+    prev_stat_line      = in.read<bool>();
+    vblank_irq_fired    = in.read<bool>();
+    window_line_counter = in.read<int>();
+    in.readBytes(bg_priority, sizeof(bg_priority));
+    in.readBytes(gfx.data(), gfx.size() * sizeof(uint32_t));
 }

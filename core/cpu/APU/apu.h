@@ -3,6 +3,8 @@
 
 #include <cstdint>
 
+#include "state/state.h"
+
 // ============================================================================
 // Game Boy APU (Audio Processing Unit) - DMG-01
 // ============================================================================
@@ -215,6 +217,10 @@ public:
     void clearBuffer();
     void consumeSamples(int count);      // Mark samples as consumed
     
+    // Save states
+    void saveState(StateWriter& out) const;
+    void loadState(StateReader& in);
+
     // Control
     void reset();
     bool isEnabled() const { return masterEnabled; }

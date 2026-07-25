@@ -900,3 +900,57 @@ void APU::writeWaveRAM(uint16_t address, uint8_t value) {
         channel3.waveRAM[offset] = value;
     }
 }
+
+// ============================================================================
+// SAVE STATES
+// ============================================================================
+// Los structs de canal son POD sin punteros, se vuelcan enteros.
+// Los buffers de audio (ring/output) NO se guardan: son transitorios
+// y se vacían al restaurar para evitar reproducir muestras viejas.
+static_assert(std::is_trivially_copyable<SquareChannel1>::value, "SquareChannel1 debe ser POD");
+static_assert(std::is_trivially_copyable<SquareChannel2>::value, "SquareChannel2 debe ser POD");
+static_assert(std::is_trivially_copyable<WaveChannel>::value,    "WaveChannel debe ser POD");
+static_assert(std::is_trivially_copyable<NoiseChannel>::value,   "NoiseChannel debe ser POD");
+
+void APU::saveState(StateWriter& out) const {
+    out.write(channel1);
+    out.write(channel2);
+    out.write(channel3);
+    out.write(channel4);
+    out.write(NR50);
+    out.write(NR51);
+    out.write(NR52);
+    out.write(masterEnabled);
+    out.write(frameSequencerTimer);
+    out.write(frameSequencerStep);
+    out.write(sampleTimer);
+    out.write(sampleAccumulator);
+    out.write(sampleCount);
+    out.write(lastLeftSample);
+    out.write(lastRightSample);
+    out.write(highPassLeft);
+    out.write(highPassRight);
+}
+
+void APU::loadState(StateReader& in) {
+    channel1            = in.read<SquareChannel1>();
+    channel2            = in.read<SquareChannel2>();
+    channel3            = in.read<WaveChannel>();
+    channel4            = in.read<NoiseChannel>();
+    NR50                = in.read<uint8_t>();
+    NR51                = in.read<uint8_t>();
+    NR52                = in.read<uint8_t>();
+    masterEnabled       = in.read<bool>();
+    frameSequencerTimer = in.read<int>();
+    frameSequencerStep  = in.read<int>();
+    sampleTimer         = in.read<int>();
+    sampleAccumulator   = in.read<float>();
+    sampleCount         = in.read<int>();
+    lastLeftSample      = in.read<float>();
+    lastRightSample     = in.read<float>();
+    highPassLeft        = in.read<float>();
+    highPassRight       = in.read<float>();
+
+    // Descartar el audio pendiente generado antes de restaurar
+    clearBuffer();
+}

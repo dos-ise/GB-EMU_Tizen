@@ -5,7 +5,8 @@
 #include <iostream>
 
 // Asegúrate de que la ruta sea la correcta en tu proyecto
-#include "mmu/mmu.h" 
+#include "mmu/mmu.h"
+#include "state/state.h"
 
 class cpu
 {
@@ -18,6 +19,10 @@ public:
 
     // Permite que componentes externos (Timer, PPU, Joypad) soliciten una interrupción
     void requestInterrupt(int bit);
+
+    // Save states
+    void saveState(StateWriter& out) const;
+    void loadState(StateReader& in);
 
 private:
     // Referencia a la memoria (MMU)

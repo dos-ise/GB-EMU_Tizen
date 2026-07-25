@@ -37,7 +37,9 @@ set(CORE_SOURCES
     core/cartridge/cartridge.cpp
     core/cartridge/IMBC/type_cartridge/RomOnly.cpp
     core/cartridge/IMBC/type_cartridge/MBC1.cpp
+    core/cartridge/IMBC/type_cartridge/MBC2.cpp
     core/cartridge/IMBC/type_cartridge/MBC3.cpp
+    core/cartridge/IMBC/type_cartridge/MBC5.cpp
 )
 
 # ==============================================================================
@@ -63,7 +65,8 @@ target_link_options(gb-emu PRIVATE
 
     # Funciones de C++ que JS puede llamar
     # Nota: _load_rom_from_js es la nueva adición crítica
-    "SHELL:-s EXPORTED_FUNCTIONS=['_main','_load_rom_from_js','_get_video_buffer','_get_video_buffer_size','_set_button','_get_audio_buffer','_get_audio_samples_available','_fill_audio_buffer','_set_audio_muted']"
+    # _malloc/_free: JS los usa para pasarle el buffer del save state a C++
+    "SHELL:-s EXPORTED_FUNCTIONS=['_main','_load_rom_from_js','_get_video_buffer','_get_video_buffer_size','_set_button','_get_audio_buffer','_get_audio_samples_available','_fill_audio_buffer','_set_audio_muted','_save_state','_get_state_data','_load_state','_malloc','_free']"
 
     # Métodos del runtime de Emscripten que JS puede usar
     # Nota: 'FS' es necesario para escribir archivos desde el navegador

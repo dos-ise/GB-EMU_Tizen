@@ -20,7 +20,29 @@ cpu::cpu(mmu& mmu_ref) : memory(mmu_ref)
 
     PC = 0x100;
     SP = 0xFFFE;
-    r8.fill(0);
+
+    // Estado de registros que deja el boot ROM.
+    // A identifica el hardware: 0x01 = Game Boy clásica, 0x11 = Game Boy
+    // Color. Muchos juegos lo leen para decidir entre rutas DMG/CGB.
+    if (memory.isCGB()) {
+        r8[A] = 0x11;
+        r8[F] = 0x80;
+        r8[B] = 0x00;
+        r8[C] = 0x00;
+        r8[D] = 0xFF;
+        r8[E] = 0x56;
+        r8[H] = 0x00;
+        r8[L] = 0x0D;
+    } else {
+        r8[A] = 0x01;
+        r8[F] = 0xB0;
+        r8[B] = 0x00;
+        r8[C] = 0x13;
+        r8[D] = 0x00;
+        r8[E] = 0xD8;
+        r8[H] = 0x01;
+        r8[L] = 0x4D;
+    }
 
     // 2. Inicialización de la tabla (Limpiar todo a nullptr)
     table_opcode.fill(nullptr);
@@ -703,7 +725,18 @@ int cpu::STOP(uint8_t opcode)
 {
     (void)opcode;
     // STOP es 0x10 0x00, saltamos el byte extra
-    PC++; 
+    PC++;
+
+    // En CGB, STOP con el switch de velocidad armado (KEY1 bit 0) no
+    // detiene la CPU: conmuta entre velocidad simple y doble.
+    if (memory.cgb_mode && memory.speed_switch_armed) {
+        memory.double_speed       = !memory.double_speed;
+        memory.speed_switch_armed = false;
+        std::cout << "[CPU] Cambio de velocidad CGB → "
+                  << (memory.double_speed ? "DOBLE" : "NORMAL") << "\n";
+        return 4;
+    }
+
     isStopped = true;
     //std::cout <<"stop " << "\n";
     return 4;
@@ -2041,4 +2074,26 @@ int cpu::LD_A_C(uint8_t opcode) {
     r8[A] = memory.readMemory(addr);
     
     return 8; // 8 ciclos
+}
+// ============================================================
+// SAVE STATES
+// ============================================================
+void cpu::saveState(StateWriter& out) const {
+    out.write(PC);
+    out.write(SP);
+    out.write(IME);
+    out.write(IME_scheduled);
+    out.write(isHalted);
+    out.write(isStopped);
+    out.writeArray(r8);
+}
+
+void cpu::loadState(StateReader& in) {
+    PC            = in.read<uint16_t>();
+    SP            = in.read<uint16_t>();
+    IME           = in.read<bool>();
+    IME_scheduled = in.read<bool>();
+    isHalted      = in.read<bool>();
+    isStopped     = in.read<bool>();
+    in.readArray(r8);
 }
