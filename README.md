@@ -1,9 +1,9 @@
 # GB-EMU for Samsung Tizen TVs 🎮
 
-A WebAssembly-powered port of **GB-EMU** — a Game Boy (DMG) emulator written from scratch in **C++17** — packaged as a Samsung Tizen TV application.
+A WebAssembly-powered port of **GB-EMU** — a Game Boy (DMG) / Game Boy Color emulator written from scratch in **C++17** — packaged as a Samsung Tizen TV application.
 This project uses [GB-EMU](https://github.com/dos-ise/GB-EMU_Tizen) compiled to WebAssembly via Emscripten and wraps it into a Tizen widget (`.wgt`) that runs directly on Samsung Smart TVs.
 
-> ⚠️ **WORK IN PROGRESS**: GB-EMU itself is under active development (incomplete CPU instruction set, MBC support, etc.) and intended for **educational and testing purposes only**.
+> ⚠️ **WORK IN PROGRESS**: GB-EMU itself is under active development (incomplete CPU instruction set, etc.) and intended for **educational and testing purposes only**.
 
 ---
 
@@ -12,7 +12,9 @@ This project uses [GB-EMU](https://github.com/dos-ise/GB-EMU_Tizen) compiled to 
 - Runs entirely on the TV (no streaming required)
 - **Loads ROMs straight from a USB stick** — no rebuild needed to play a different game, with an on-screen picker if multiple ROMs are found (falls back to a bundled example ROM if none are present)
 - **Download ROMs over Wi-Fi** — fetch ROMs from a tiny HTTP server on your PC and store them on the TV; they keep working offline afterwards, no USB stick needed
-- **In-game menu** (Blue button / Select+Start) to switch ROMs, download ROMs, or exit the app without restarting
+- **Save states** — save and restore your progress from the game menu (one slot per game); the app offers to save before you switch ROMs or exit, and to continue from your save when you reopen a game
+- **Game Boy Color support** — GBC and GBC-only ROMs boot and render in color (CGB mode with banked VRAM/WRAM and color palettes)
+- **In-game menu** (BACK button / Select+Start) to save/load state, switch ROMs, download ROMs, or exit the app without restarting
 - Supports Samsung TV remote control mapping (D-Pad, OK, Back, colored buttons)
 - Supports standard gamepads/controllers (polled via the Gamepad API, D-Pad + left stick)
 - Optimized for Samsung Tizen TV devices
@@ -22,9 +24,13 @@ This project uses [GB-EMU](https://github.com/dos-ise/GB-EMU_Tizen) compiled to 
 
 ## Screenshots
 
-| ROM Picker (USB) | Gameplay | In-Game Menu |
+| ROM Picker | Gameplay | In-Game Menu |
 |:---:|:---:|:---:|
-| ![ROM select screen showing mario.gb and tetris.gb found on USB](docs/screenshots/rom-select.jpg) | ![Tetris title screen running on the TV](docs/screenshots/gameplay-tetris.jpg) | ![In-game menu with Resume, Change ROM and Exit App options](docs/screenshots/game-menu.jpg) |
+| ![ROM select screen listing ROMs from USB, saved storage and the bundled example](docs/screenshots/rom-select.png) | ![Bundled example ROM running fullscreen with control hints in the side panels](docs/screenshots/gameplay.png) | ![In-game menu with Resume, Save/Load State, Change ROM, Download ROMs, Set ROM Server and Exit App](docs/screenshots/game-menu.png) |
+
+| Save States | Save Before Leaving | Set ROM Server |
+|:---:|:---:|:---:|
+| ![Saved state found prompt offering to continue from the saved state or start from the beginning](docs/screenshots/save-state.png) | ![Save state prompt with Save, Discard and Cancel options shown before changing ROM or exiting](docs/screenshots/save-prompt.png) | ![ROM server address editor with the D-pad digit editor over the running game](docs/screenshots/set-rom-server.png) |
 
 ---
 
@@ -136,7 +142,7 @@ The TV and your PC must be on the same network.
    ./tools/serve-roms.py path/to/roms      # defaults to ./roms on port 8000
    ```
    It prints the exact URL the app expects and serves a `roms.json` index automatically.
-2. On the TV, open the in-game menu (**BLUE** button) and choose **Set ROM Server** to enter that address with the D-pad (LEFT/RIGHT = digit, UP/DOWN = change, OK = save). It's stored on the TV, so this is only needed once — or again whenever your PC's IP changes. (You can also bake your IP in as the default via `DEFAULT_ROM_SERVER_URL` in `src/index.html` before building.)
+2. On the TV, open the in-game menu (**BACK** button) and choose **Set ROM Server** to enter that address with the D-pad (LEFT/RIGHT = digit, UP/DOWN = change, OK = save). It's stored on the TV, so this is only needed once — or again whenever your PC's IP changes. (You can also bake your IP in as the default via `DEFAULT_ROM_SERVER_URL` in `src/index.html` before building.)
 3. Back in the menu, choose **Download ROMs (Wi-Fi)**. Every ROM on the server is saved to the app's private storage (`wgt-private/roms/`) and shows up in the picker tagged `[saved]`.
 4. Stop the server — downloaded ROMs keep working offline. Re-run the download any time to pick up new files (same-named files are overwritten).
 
@@ -151,9 +157,21 @@ Open the **in-game menu** at any time:
 | **BACK** (remote) | Open/close game menu |
 | **SELECT + START together** (gamepad) | Open/close game menu |
 
-From the menu you can pick **Change ROM** to re-scan USB + saved ROMs and load a different one (the bundled example is always offered too), **Download ROMs (Wi-Fi)** to fetch new ROMs from your PC, **Set ROM Server** to point the app at your PC (stored on the TV), or **Exit App** to close GBEmu entirely — see [Controls](#controls) below.
+From the menu you can pick **Save State** / **Load State** to snapshot or restore your progress (see [Save States](#save-states)), **Change ROM** to re-scan USB + saved ROMs and load a different one (the bundled example is always offered too), **Download ROMs (Wi-Fi)** to fetch new ROMs from your PC, **Set ROM Server** to point the app at your PC (stored on the TV), or **Exit App** to close GBEmu entirely — see [Controls](#controls) below.
 
 **Note:** ROMs are only scanned at the top level of each USB drive (no subfolders). This repository does not include any copyrighted ROMs — you must own a legitimate copy of anything you copy to the stick or serve over Wi-Fi.
+
+---
+
+## Save States
+
+The full machine state (CPU, memory, graphics, timers, audio, cartridge RAM and mapper registers) can be snapshotted at any moment and restored later — one save slot per game, keyed by the ROM's title:
+
+- **Save State** / **Load State** in the game menu snapshot or restore the running game (loading asks for confirmation first, since it discards your current progress).
+- Picking **Change ROM**, **Download ROMs (Wi-Fi)** or **Exit App** while a game is running offers **Save / Discard / Cancel** first, so you never lose progress by accident.
+- Reopening a game that has a saved state asks whether to **continue from the save** or **start from the beginning**.
+
+States are stored in the app's private storage on the TV (`wgt-private/states/`, surviving restarts and app updates) and in `localStorage` when testing in a desktop browser. A state that fails to restore (corrupt, or from a different game) is rejected safely and the ROM boots fresh instead.
 
 ---
 
@@ -167,7 +185,7 @@ From the menu you can pick **Change ROM** to re-scan USB + saved ROMs and load a
 | **Play/Pause** | B |
 | **CH +** | SELECT |
 | **CH −** | START |
-| **BACK** | Open/close game menu (Resume / Change ROM / Download ROMs / Set ROM Server / Exit App) |
+| **BACK** | Open/close game menu (Resume / Save State / Load State / Change ROM / Download ROMs / Set ROM Server / Exit App) |
 
 Only hard keys are used — the colored (RGYB) buttons are virtual on current Samsung remotes, so they're deliberately avoided.
 
@@ -181,7 +199,7 @@ Only hard keys are used — the colored (RGYB) buttons are virtual on current Sa
 | **B** | B |
 | **Select / Back** | SELECT |
 | **Start** | START |
-| **Select + Start** (held together) | Open/close game menu (Resume / Change ROM / Download ROMs / Set ROM Server / Exit App) |
+| **Select + Start** (held together) | Open/close game menu (Resume / Save State / Load State / Change ROM / Download ROMs / Set ROM Server / Exit App) |
 
 ---
 
@@ -189,7 +207,7 @@ Only hard keys are used — the colored (RGYB) buttons are virtual on current Sa
 
 ```
 GB-EMU_Tizen/
-├── core/                # Emulator logic (CPU, MMU, Cartridge, Mappers)
+├── core/                # Emulator logic (CPU, MMU, PPU, Cartridge/MBCs, save-state serialization)
 ├── emc_main.cpp         # Main entry point for the Web version
 ├── CMakeLists.txt       # Build configuration
 ├── src/
@@ -216,9 +234,11 @@ GB-EMU_Tizen/
 * [x] Timers & Interrupts
 * [x] Samsung TV remote control mapping
 * [x] Gamepad/controller support
+* [x] MBC support (MBC1 / MBC2 / MBC3 / MBC5)
+* [x] Save states (full machine snapshot, one slot per game)
+* [x] Game Boy Color (CGB) mode — GBC-only ROMs boot and render in color
 * [ ] Complete CPU instruction set — *In progress*
 * [ ] Joypad input handling (core) — *In progress*
-* [ ] MBC support — *In progress*
 
 ---
 
