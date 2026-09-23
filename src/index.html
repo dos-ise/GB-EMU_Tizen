@@ -1684,6 +1684,8 @@
     }
     </script>
 
+    <!-- Chromium 69 (Tizen 5.5) has no globalThis, which the Emscripten glue reads on load -->
+    <script>if (typeof globalThis === 'undefined') { window.globalThis = window; }</script>
     {{{ SCRIPT }}}
 
 </body>
