@@ -119,6 +119,8 @@
             width: 640px;
             height: 576px;
             image-rendering: pixelated;
+            /* Capa propia: cada trama nueva ya no repinta las sombras de alrededor */
+            will-change: transform;
             border: 3px solid #333;
             box-shadow: 2px 2px 5px rgba(0,0,0,0.3);
         }

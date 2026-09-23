@@ -71,6 +71,8 @@ struct SquareChannel1 {
     void reset();
     void trigger();
     void tickFrequency();
+    void advanceFrequency(int cycles);   // same as tickFrequency() called that many times
+    int cyclesToOutputChange(int limit) const;  // cycles until the first timer tick that changes getOutput(); limit + 1 if none within limit
     void tickLength();
     void tickEnvelope();
     void tickSweep();
@@ -110,6 +112,8 @@ struct SquareChannel2 {
     void reset();
     void trigger();
     void tickFrequency();
+    void advanceFrequency(int cycles);   // same as tickFrequency() called that many times
+    int cyclesToOutputChange(int limit) const;  // cycles until the first timer tick that changes getOutput(); limit + 1 if none within limit
     void tickLength();
     void tickEnvelope();
     float getOutput() const;
@@ -149,6 +153,8 @@ struct WaveChannel {
     void reset();
     void trigger();
     void tickFrequency();
+    void advanceFrequency(int cycles);   // same as tickFrequency() called that many times
+    int cyclesToOutputChange(int limit) const;  // cycles until the first timer tick that changes getOutput(); limit + 1 if none within limit
     void tickLength();
     float getOutput() const;
 };
@@ -189,6 +195,8 @@ struct NoiseChannel {
     void reset();
     void trigger();
     void tickFrequency();
+    void advanceFrequency(int cycles);   // same as tickFrequency() called that many times
+    int cyclesToOutputChange(int limit) const;  // cycles until the first timer tick that changes getOutput(); limit + 1 if none within limit
     void tickLength();
     void tickEnvelope();
     float getOutput() const;
@@ -218,7 +226,7 @@ public:
     void consumeSamples(int count);      // Mark samples as consumed
     
     // Save states
-    void saveState(StateWriter& out) const;
+    void saveState(StateWriter& out);   // not const: runs the cycles tick() deferred
     void loadState(StateReader& in);
 
     // Control
@@ -254,6 +262,15 @@ private:
     float sampleAccumulator = 0.0f;
     int sampleCount = 0;
     
+    // Raw stereo mix (before the filters) of the current channel state; stale once a register
+    // is written, recomputed by mixChannels() on every cycle where something changes
+    float rawLeft = 0.0f;
+    float rawRight = 0.0f;
+    bool rawDirty = true;
+    
+    // Cycles passed to tick() and not yet run (see catchUp())
+    int pendingCycles = 0;
+    
     // Audio filters for smoother output
     float lastLeftSample = 0.0f;   // For low-pass filter
     float lastRightSample = 0.0f;
@@ -274,10 +291,14 @@ private:
     int outputSamplesReady = 0;
     
     // Internal methods
+    void catchUp();
     void tickFrameSequencer();
     void tickChannels(int cycles);
     void generateSample();
     float mixChannels();
+    void rawMix(float& left, float& right) const;
+    float filterRun(float left, float right, int cycles);
+    bool channelAudible(int channel) const;
     void pushSample(float sample);
     
     // Wave RAM access helpers
