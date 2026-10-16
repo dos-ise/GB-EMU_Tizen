@@ -1,0 +1,86 @@
+# Builds the Tizen widget (GBEmu.wgt) via the repo's Dockerfile and creates a
+# GitHub release with the artifact attached. Modeled on the doom-tizen
+# release-development.yml workflow, simplified to a single job (no GHCR push).
+name: Release GB-EMU Tizen
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version (e.g. 1.2). Leave empty for a timestamped pre-release.'
+        required: false
+        default: ''
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Build Docker image
+        run: docker build -t gbemu-tizen .
+
+      - name: Create temporary container
+        run: docker create --name gbemu-tmp gbemu-tizen
+
+      - name: Copy GBEmu.wgt from container
+        run: docker cp gbemu-tmp:/home/gbemu/GBEmu.wgt .
+
+      - name: Remove temporary container
+        run: docker rm gbemu-tmp
+
+      - name: Generate timestamp number
+        run: |
+          TIMESTAMP=$(TZ="CET" date +"%Y.%m%d.%H%M")
+          echo "TIMESTAMP=$TIMESTAMP" >> $GITHUB_ENV
+
+      # Only runs for the timestamped pre-release flow, not for versioned releases.
+      - name: Delete existing GitHub pre-releases
+        if: ${{ github.event.inputs.version == '' }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "Checking for existing pre-releases..."
+          releases=$(curl -sSL \
+            -H "Authorization: token $GITHUB_TOKEN" \
+            -H "Accept: application/vnd.github.v3+json" \
+            "https://api.github.com/repos/${{ github.repository }}/releases")
+          echo "$releases" | jq -c '.[] | select(.prerelease==true)' | while read -r release; do
+            release_id=$(echo "$release" | jq -r '.id')
+            tag_name=$(echo "$release" | jq -r '.tag_name')
+            echo "Deleting pre-release: $tag_name (ID: $release_id)"
+            curl -sSL -X DELETE \
+              -H "Authorization: token $GITHUB_TOKEN" \
+              -H "Accept: application/vnd.github.v3+json" \
+              "https://api.github.com/repos/${{ github.repository }}/releases/$release_id"
+            curl -sSL -X DELETE \
+              -H "Authorization: token $GITHUB_TOKEN" \
+              -H "Accept: application/vnd.github.v3+json" \
+              "https://api.github.com/repos/${{ github.repository }}/git/refs/tags/${tag_name}"
+          done
+          echo "Cleanup completed."
+
+      # Creates a GitHub release. If a version was provided via workflow_dispatch,
+      # it creates a proper release (e.g. v1.2); otherwise a timestamped pre-release.
+      # --generate-notes collects all commits since the last tag as release notes.
+      - name: Create GitHub release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if [ -n "${{ github.event.inputs.version }}" ]; then
+            RELEASE_TAG="v${{ github.event.inputs.version }}"
+            RELEASE_NAME="v${{ github.event.inputs.version }}"
+            PRERELEASE=""
+          else
+            RELEASE_TAG="v${{ env.TIMESTAMP }}"
+            RELEASE_NAME="v${{ env.TIMESTAMP }}"
+            PRERELEASE="--prerelease"
+          fi
+          gh release create "$RELEASE_TAG" ./GBEmu.wgt \
+            --title "$RELEASE_NAME" \
+            --generate-notes \
+            $PRERELEASE \
+            --repo "${{ github.repository }}"
