@@ -46,8 +46,43 @@ void ppu::debug_mode_change(uint8_t, uint8_t)    {}
 // ============================================================
 void ppu::step(int cpu_cycles)
 {
-    for (int i = 0; i < cpu_cycles; i++)
+    while (cpu_cycles > 0)
+    {
+        // LCD apagado: step_one_dot() solo resetea el estado, una vez basta
+        if (!(memory.IO[0x40] & 0x80))
+        {
+            step_one_dot();
+            return;
+        }
+
+        // En los dots donde no pasa nada solo avanzan los contadores. El siguiente dot que
+        // puede cambiar el estado es un cambio de modo (81, 253) o el fin de línea (456):
+        // todo lo anterior se salta de una vez y ese dot se ejecuta con step_one_dot().
+        int next;
+        if (current_line < 144)
+        {
+            if (scanline_dots < 80)       next = (current_mode != 2) ? scanline_dots + 1 : 81;
+            else if (scanline_dots < 252) next = (current_mode != 3) ? scanline_dots + 1 : 253;
+            else                          next = (current_mode != 0) ? scanline_dots + 1 : 456;
+        }
+        else
+        {
+            next = (current_mode != 1) ? scanline_dots + 1 : 456;
+        }
+
+        int quiet = next - 1 - scanline_dots;
+        if (quiet > 0)
+        {
+            if (quiet > cpu_cycles) quiet = cpu_cycles;
+            scanline_dots += quiet;
+            dots_counter  += quiet;
+            cpu_cycles    -= quiet;
+            if (cpu_cycles == 0) break;
+        }
+
         step_one_dot();
+        cpu_cycles--;
+    }
 }
 
 // ============================================================

@@ -25,6 +25,10 @@ APU* global_apu = nullptr;
 bool is_game_loaded = false;
 bool audio_muted = false;
 
+// Ritmo de la emulación en tiempo real (ver main_loop)
+double last_loop_time = 0.0;
+double frame_debt = 0.0;
+
 // Buffer del último save state generado (JS lo lee vía get_state_data)
 std::vector<uint8_t> state_buffer;
 
@@ -38,6 +42,8 @@ constexpr uint32_t STATE_VERSION = 1;
 // Borra la memoria del juego anterior antes de cargar uno nuevo
 void reset_emulator() {
     is_game_loaded = false;
+    last_loop_time = 0.0;
+    frame_debt = 0.0;
 
     if (global_cpu) { delete global_cpu; global_cpu = nullptr; }
     if (global_timer) { delete global_timer; global_timer = nullptr; }
@@ -204,12 +210,10 @@ extern "C" {
 // ============================================================
 // MAIN LOOP
 // ============================================================
-void main_loop() {
-    // Si no hay juego cargado, no hacemos nada (CPU idle)
-    if (!is_game_loaded || !global_cpu) {
-        return; 
-    }
+// Una trama del Game Boy: 70224 ciclos a 4194304 Hz (~16.74 ms, 59.73 Hz)
+constexpr double GB_FRAME_MS = 70224.0 * 1000.0 / 4194304.0;
 
+void run_frame() {
     const int T_CYCLES_PER_FRAME = 70224;
     int t_cycles_this_frame = 0;
 
@@ -231,6 +235,34 @@ void main_loop() {
 
         t_cycles_this_frame += ppu_t_cycles;
     }
+}
+
+void main_loop() {
+    // Si no hay juego cargado, no hacemos nada (CPU idle)
+    if (!is_game_loaded || !global_cpu) {
+        last_loop_time = 0.0;
+        return; 
+    }
+
+    // El juego va al ritmo del reloj real, no al de las llamadas del navegador: una TV que
+    // llama ~50 veces por segundo haría correr todo al 84% de velocidad y dejaría el audio
+    // sin muestras. Una llamada que llega tarde ejecuta dos tramas (tres como máximo) y solo
+    // se dibuja la última. Se permite medio frame de adelanto, así una pantalla de 60 Hz que
+    // llama un poco más lento que 59.73 Hz sigue ejecutando exactamente una trama por llamada.
+    double now = emscripten_get_now();
+    double elapsed = last_loop_time == 0.0 ? GB_FRAME_MS : now - last_loop_time;
+    last_loop_time = now;
+    if (elapsed > 250.0) elapsed = GB_FRAME_MS;   // pausa o bloqueo: seguir sin acelerar
+    frame_debt += elapsed;
+    if (frame_debt > 3 * GB_FRAME_MS) frame_debt = 3 * GB_FRAME_MS;
+
+    int frames = 0;
+    while (frame_debt > GB_FRAME_MS * 0.5 && frames < 3) {
+        run_frame();
+        frame_debt -= GB_FRAME_MS;
+        frames++;
+    }
+    if (frames == 0) return;
 
     // Dibujar pantalla
     EM_ASM({

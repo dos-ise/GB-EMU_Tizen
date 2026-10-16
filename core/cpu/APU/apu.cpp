@@ -76,6 +76,30 @@ void SquareChannel1::tickFrequency() {
     }
 }
 
+void SquareChannel1::advanceFrequency(int cycles) {
+    if (cycles <= 0) return;
+    const int period = (2048 - frequency) * 4;
+    const int first = frequencyTimer > 0 ? frequencyTimer : 1;
+    if (cycles < first) { frequencyTimer -= cycles; return; }
+    if (period <= 0) { for (int i = 0; i < cycles; i++) tickFrequency(); return; }
+    const int rest = cycles - first;
+    frequencyTimer = period - rest % period;
+    waveformPosition = (waveformPosition + 1 + rest / period) & 7;
+}
+
+int SquareChannel1::cyclesToOutputChange(int limit) const {
+    const int period = (2048 - frequency) * 4;
+    if (period <= 0) return 1;
+    const uint8_t pattern = DUTY_PATTERNS[(NR11 >> 6) & 0x03];
+    const int current = (pattern >> (7 - waveformPosition)) & 1;
+    int cycles = frequencyTimer > 0 ? frequencyTimer : 1;
+    for (int step = 1; step <= 8 && cycles <= limit; step++, cycles += period) {
+        const int position = (waveformPosition + step) & 7;
+        if (((pattern >> (7 - position)) & 1) != current) return cycles;
+    }
+    return limit + 1;
+}
+
 void SquareChannel1::tickLength() {
     if (lengthEnabled && lengthCounter > 0) {
         if (--lengthCounter == 0) {
@@ -189,6 +213,30 @@ void SquareChannel2::tickFrequency() {
     }
 }
 
+void SquareChannel2::advanceFrequency(int cycles) {
+    if (cycles <= 0) return;
+    const int period = (2048 - frequency) * 4;
+    const int first = frequencyTimer > 0 ? frequencyTimer : 1;
+    if (cycles < first) { frequencyTimer -= cycles; return; }
+    if (period <= 0) { for (int i = 0; i < cycles; i++) tickFrequency(); return; }
+    const int rest = cycles - first;
+    frequencyTimer = period - rest % period;
+    waveformPosition = (waveformPosition + 1 + rest / period) & 7;
+}
+
+int SquareChannel2::cyclesToOutputChange(int limit) const {
+    const int period = (2048 - frequency) * 4;
+    if (period <= 0) return 1;
+    const uint8_t pattern = DUTY_PATTERNS[(NR21 >> 6) & 0x03];
+    const int current = (pattern >> (7 - waveformPosition)) & 1;
+    int cycles = frequencyTimer > 0 ? frequencyTimer : 1;
+    for (int step = 1; step <= 8 && cycles <= limit; step++, cycles += period) {
+        const int position = (waveformPosition + step) & 7;
+        if (((pattern >> (7 - position)) & 1) != current) return cycles;
+    }
+    return limit + 1;
+}
+
 void SquareChannel2::tickLength() {
     if (lengthEnabled && lengthCounter > 0) {
         if (--lengthCounter == 0) {
@@ -271,6 +319,39 @@ void WaveChannel::tickFrequency() {
             sampleBuffer = (waveRAM[byteIndex] >> 4) & 0x0F;
         }
     }
+}
+
+void WaveChannel::advanceFrequency(int cycles) {
+    if (cycles <= 0) return;
+    const int period = (2048 - frequency) * 2;
+    const int first = frequencyTimer > 0 ? frequencyTimer : 1;
+    if (cycles < first) { frequencyTimer -= cycles; return; }
+    if (period <= 0) { for (int i = 0; i < cycles; i++) tickFrequency(); return; }
+    const int rest = cycles - first;
+    frequencyTimer = period - rest % period;
+    waveformPosition = (waveformPosition + 1 + rest / period) & 31;
+    uint8_t byteIndex = waveformPosition / 2;
+    if (waveformPosition & 1) {
+        sampleBuffer = waveRAM[byteIndex] & 0x0F;
+    } else {
+        sampleBuffer = (waveRAM[byteIndex] >> 4) & 0x0F;
+    }
+}
+
+int WaveChannel::cyclesToOutputChange(int limit) const {
+    const int period = (2048 - frequency) * 2;
+    if (period <= 0 || volumeShift == 0) return 1;
+    const int shift = volumeShift - 1;
+    const int current = sampleBuffer >> shift;
+    int position = waveformPosition;
+    int cycles = frequencyTimer > 0 ? frequencyTimer : 1;
+    for (int step = 1; step <= 32 && cycles <= limit; step++, cycles += period) {
+        position = (position + 1) & 31;
+        const uint8_t byte = waveRAM[position / 2];
+        const int sample = (position & 1) ? (byte & 0x0F) : ((byte >> 4) & 0x0F);
+        if ((sample >> shift) != current) return cycles;
+    }
+    return limit + 1;
 }
 
 void WaveChannel::tickLength() {
@@ -360,6 +441,45 @@ void NoiseChannel::tickFrequency() {
     }
 }
 
+void NoiseChannel::advanceFrequency(int cycles) {
+    if (cycles <= 0) return;
+    const int period = divisor << clockShift;
+    const int first = frequencyTimer > 0 ? frequencyTimer : 1;
+    if (cycles < first) { frequencyTimer -= cycles; return; }
+    if (period <= 0) { for (int i = 0; i < cycles; i++) tickFrequency(); return; }
+    const int rest = cycles - first;
+    const int fires = 1 + rest / period;
+    frequencyTimer = period - rest % period;
+    for (int i = 0; i < fires; i++) {
+        uint8_t xorResult = (lfsr & 0x01) ^ ((lfsr >> 1) & 0x01);
+        lfsr >>= 1;
+        lfsr |= (xorResult << 14);
+        if (widthMode) {
+            lfsr &= ~(1 << 6);
+            lfsr |= (xorResult << 6);
+        }
+    }
+}
+
+int NoiseChannel::cyclesToOutputChange(int limit) const {
+    const int period = divisor << clockShift;
+    if (period <= 0) return 1;
+    uint16_t bits = lfsr;
+    const int current = bits & 0x01;
+    int cycles = frequencyTimer > 0 ? frequencyTimer : 1;
+    for (; cycles <= limit; cycles += period) {
+        uint8_t xorResult = (bits & 0x01) ^ ((bits >> 1) & 0x01);
+        bits >>= 1;
+        bits |= (xorResult << 14);
+        if (widthMode) {
+            bits &= ~(1 << 6);
+            bits |= (xorResult << 6);
+        }
+        if ((bits & 0x01) != current) return cycles;
+    }
+    return limit + 1;
+}
+
 void NoiseChannel::tickLength() {
     if (lengthEnabled && lengthCounter > 0) {
         if (--lengthCounter == 0) {
@@ -402,6 +522,8 @@ APU::APU() {
 }
 
 void APU::reset() {
+    rawDirty = true;
+    pendingCycles = 0;
     channel1.reset();
     channel2.reset();
     channel3.reset();
@@ -436,6 +558,7 @@ void APU::reset() {
 }
 
 void APU::setSampleRate(int rate) {
+    catchUp();
     hostSampleRate = rate;
     cyclesPerSample = CPU_CLOCK / rate;
 }
@@ -443,7 +566,64 @@ void APU::setSampleRate(int rate) {
 void APU::tick(int cpuCycles) {
     if (!masterEnabled) return;
     
-    for (int i = 0; i < cpuCycles; i++) {
+    // Nothing outside the APU sees its state between register accesses and buffer reads, so
+    // cycles are only counted here and run in one batch per host sample (or earlier, when
+    // someone looks: every public entry point calls catchUp() first).
+    pendingCycles += cpuCycles;
+    if (pendingCycles >= cyclesPerSample - sampleTimer) catchUp();
+}
+
+void APU::catchUp() {
+    int cpuCycles = pendingCycles;
+    pendingCycles = 0;
+    
+    while (cpuCycles > 0) {
+        // Between two events (an audible channel changing its output, a frame sequencer step)
+        // nothing but counters moves and the raw mix stays constant, so those cycles are
+        // folded into one filterRun() call instead of being mixed one by one. A silent channel
+        // (off, muted or panned nowhere) never ends a stretch; its timer catches up in bulk.
+        const int toFrameSeq = CYCLES_PER_FRAME_SEQ - frameSequencerTimer;
+        const int toSample = cyclesPerSample - sampleTimer;
+        int k = std::min(cpuCycles, std::min(toFrameSeq, std::max(toSample, 1)));
+        
+        int change[4] = { k + 1, k + 1, k + 1, k + 1 };
+        if (channelAudible(1)) change[0] = channel1.cyclesToOutputChange(k);
+        if (channelAudible(2)) change[1] = channel2.cyclesToOutputChange(k);
+        if (channelAudible(3)) change[2] = channel3.cyclesToOutputChange(k);
+        if (channelAudible(4)) change[3] = channel4.cyclesToOutputChange(k);
+        for (int c = 0; c < 4; c++) k = std::min(k, change[c]);
+        
+        const bool event = k == toFrameSeq || change[0] == k || change[1] == k
+                        || change[2] == k || change[3] == k;
+        
+        // Cycles up to the event (or all of them if there is none) only move counters
+        const int quiet = event ? k - 1 : k;
+        if (quiet > 0) {
+            if (rawDirty) {
+                rawMix(rawLeft, rawRight);
+                rawDirty = false;
+            }
+            sampleAccumulator += filterRun(rawLeft, rawRight, quiet);
+            sampleCount += quiet;
+            
+            frameSequencerTimer += quiet;
+            sampleTimer += quiet;
+            channel1.advanceFrequency(quiet);
+            channel2.advanceFrequency(quiet);
+            channel3.advanceFrequency(quiet);
+            channel4.advanceFrequency(quiet);
+            cpuCycles -= quiet;
+            
+            if (!event) {
+                if (sampleTimer >= cyclesPerSample) {
+                    sampleTimer = 0;
+                    generateSample();
+                }
+                continue;
+            }
+        }
+        
+        // The cycle where the event happens runs exactly as before
         // Tick Frame Sequencer
         frameSequencerTimer++;
         if (frameSequencerTimer >= CYCLES_PER_FRAME_SEQ) {
@@ -467,7 +647,18 @@ void APU::tick(int cpuCycles) {
             sampleTimer = 0;
             generateSample();
         }
+        cpuCycles--;
     }
+}
+
+bool APU::channelAudible(int channel) const {
+    switch (channel) {
+        case 1: return channel1.enabled && channel1.dacEnabled && channel1.volume > 0 && (NR51 & 0x11);
+        case 2: return channel2.enabled && channel2.dacEnabled && channel2.volume > 0 && (NR51 & 0x22);
+        case 3: return channel3.enabled && channel3.dacEnabled && channel3.volumeShift != 0 && (NR51 & 0x44);
+        case 4: return channel4.enabled && channel4.dacEnabled && channel4.volume > 0 && (NR51 & 0x88);
+    }
+    return true;
 }
 
 void APU::tickFrameSequencer() {
@@ -518,7 +709,7 @@ void APU::tickFrameSequencer() {
     frameSequencerStep = (frameSequencerStep + 1) & 7;
 }
 
-float APU::mixChannels() {
+void APU::rawMix(float& outLeft, float& outRight) const {
     // Get output from each channel
     float ch1 = channel1.getOutput();
     float ch2 = channel2.getOutput();
@@ -552,6 +743,17 @@ float APU::mixChannels() {
     left /= 4.0f;
     right /= 4.0f;
     
+    outLeft = left;
+    outRight = right;
+}
+
+float APU::mixChannels() {
+    float left, right;
+    rawMix(left, right);
+    rawLeft = left;
+    rawRight = right;
+    rawDirty = false;
+    
     // Apply LOW-PASS FILTER to smooth harsh square waves
     // This emulates the analog filtering of real Game Boy hardware
     left = lastLeftSample + LP_FACTOR * (left - lastLeftSample);
@@ -573,6 +775,61 @@ float APU::mixChannels() {
     mixed *= masterVolume;
     
     return mixed;
+}
+
+// n iterations of the per-cycle LOW-PASS/HIGH-PASS pair of mixChannels() for one side, with the
+// raw input held at x. y and h are that side's filter states; returns the sum of the n outputs.
+// Closed form: y_i = x + d*q^i and h_i = x + p^i*e0 + c*(p^i - q^i), with d = y0 - x, e0 = h0 - x
+// and c = d*(1-p)*q/(p-q). Everything that depends only on n comes from a table.
+namespace {
+struct FilterRunTable {
+    static const int SIZE = 1024;
+    double qn[SIZE], pn[SIZE], sumQ1[SIZE], sumQ0[SIZE], sumP0[SIZE];
+    double k;
+    void fill(double q, double p) {
+        k = (1.0 - p) * q / (p - q);
+        for (int n = 0; n < SIZE; n++) set(n, std::pow(q, n), std::pow(p, n), q, p);
+    }
+    void set(int n, double qPow, double pPow, double q, double p) {
+        qn[n] = qPow;
+        pn[n] = pPow;
+        sumQ1[n] = q * (1.0 - qPow) / (1.0 - q);   // q^1 + ... + q^n
+        sumQ0[n] = (1.0 - qPow) / (1.0 - q);       // q^0 + ... + q^(n-1)
+        sumP0[n] = (1.0 - pPow) / (1.0 - p);       // p^0 + ... + p^(n-1)
+    }
+};
+FilterRunTable filterTable;
+bool filterTableReady = false;
+
+double filterRunSide(double x, float& y, float& h, int n) {
+    const FilterRunTable& t = filterTable;
+    const double d = y - x, e0 = h - x;
+    const double c = t.k * d;
+    const double sumE = e0 * t.sumP0[n] + c * (t.sumP0[n] - t.sumQ0[n]);
+    y = static_cast<float>(x + d * t.qn[n]);
+    h = static_cast<float>(x + t.pn[n] * e0 + c * (t.pn[n] - t.qn[n]));
+    return d * t.sumQ1[n] - sumE;
+}
+}
+
+float APU::filterRun(float left, float right, int cycles) {
+    if (!filterTableReady) {
+        filterTable.fill(1.0 - LP_FACTOR, HP_FACTOR);
+        filterTableReady = true;
+    }
+    if (cycles >= FilterRunTable::SIZE) {
+        // Only reachable with a very low host sample rate: split into table-sized runs
+        float sum = 0.0f;
+        while (cycles > 0) {
+            int n = std::min(cycles, FilterRunTable::SIZE - 1);
+            sum += filterRun(left, right, n);
+            cycles -= n;
+        }
+        return sum;
+    }
+    double sumLeft = filterRunSide(left, lastLeftSample, highPassLeft, cycles);
+    double sumRight = filterRunSide(right, lastRightSample, highPassRight, cycles);
+    return static_cast<float>((sumLeft + sumRight) * 0.5 * masterVolume);
 }
 
 void APU::generateSample() {
@@ -614,20 +871,24 @@ void APU::pushSample(float sample) {
 // ============================================================================
 
 float* APU::getBufferPointer() {
+    catchUp();
     // Return pointer to the LINEAR output buffer (not the ring buffer)
     // JS should call fillOutputBuffer() first, then read from this pointer
     return outputBuffer;
 }
 
 float* APU::getOutputBuffer() {
+    catchUp();
     return outputBuffer;
 }
 
 int APU::getSamplesAvailable() {
+    catchUp();
     return samplesAvailable;
 }
 
 int APU::fillOutputBuffer(int maxSamples) {
+    catchUp();
     // Copy samples from ring buffer to linear output buffer
     // This is what JS should call before reading from getBufferPointer()
     
@@ -654,6 +915,7 @@ int APU::fillOutputBuffer(int maxSamples) {
 }
 
 void APU::clearBuffer() {
+    catchUp();
     bufferWritePos = 0;
     bufferReadPos = 0;
     samplesAvailable = 0;
@@ -663,6 +925,7 @@ void APU::clearBuffer() {
 }
 
 void APU::consumeSamples(int count) {
+    catchUp();
     // This is now handled by fillOutputBuffer, but we keep it for compatibility
     if (count > samplesAvailable) {
         count = samplesAvailable;
@@ -676,6 +939,7 @@ void APU::consumeSamples(int count) {
 // ============================================================================
 
 uint8_t APU::readByte(uint16_t address) {
+    catchUp();
     // Audio registers are at $FF10-$FF3F
     
     switch (address) {
@@ -731,6 +995,8 @@ uint8_t APU::readByte(uint16_t address) {
 }
 
 void APU::writeByte(uint16_t address, uint8_t value) {
+    catchUp();
+    rawDirty = true;
     // If APU is disabled, only NR52 can be written
     if (!masterEnabled && address != 0xFF26 && address < 0xFF30) {
         return;
@@ -912,7 +1178,8 @@ static_assert(std::is_trivially_copyable<SquareChannel2>::value, "SquareChannel2
 static_assert(std::is_trivially_copyable<WaveChannel>::value,    "WaveChannel debe ser POD");
 static_assert(std::is_trivially_copyable<NoiseChannel>::value,   "NoiseChannel debe ser POD");
 
-void APU::saveState(StateWriter& out) const {
+void APU::saveState(StateWriter& out) {
+    catchUp();
     out.write(channel1);
     out.write(channel2);
     out.write(channel3);
@@ -933,6 +1200,8 @@ void APU::saveState(StateWriter& out) const {
 }
 
 void APU::loadState(StateReader& in) {
+    catchUp();
+    rawDirty = true;
     channel1            = in.read<SquareChannel1>();
     channel2            = in.read<SquareChannel2>();
     channel3            = in.read<WaveChannel>();

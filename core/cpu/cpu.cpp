@@ -626,8 +626,6 @@ int cpu::step()
     }
 
     // DEBUG: Imprimir estado de CPU antes de ejecutar
-    uint8_t if_reg = memory.readMemory(0xFF0F);
-    uint8_t ie_reg = memory.readMemory(0xFFFF);
     // std::cout << "[CPU] PC=0x" << std::hex << pc_before 
     //           << " OP=0x" << (int)opcode
     //           << " IME=" << std::dec << (IME ? 1 : 0)
