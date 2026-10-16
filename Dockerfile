@@ -62,15 +62,46 @@ WORKDIR /home/gbemu/gb-emu-tizen
 # reconfigure in this container.
 RUN rm -rf build
 
+# Tizen 5.5 (2020 sets) runs Chromium 69, whose WebAssembly has no bulk memory, no
+# non-trapping float-to-int and no BigInt at the JS/WASM boundary. Current Emscripten refuses
+# MIN_CHROME_VERSION below 85, so these features are switched off directly. WASM_BIGINT=0
+# prints a deprecation warning with Emscripten 6.0.10 but still takes effect.
+ENV WASM_COMPAT="-mno-bulk-memory -mno-bulk-memory-opt -mno-nontrapping-fptoint"
+
 RUN bash -lc "source /home/gbemu/emsdk/emsdk_env.sh && \
     emcmake cmake \
         -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_C_FLAGS='$WASM_COMPAT' \
+        -DCMAKE_CXX_FLAGS='$WASM_COMPAT' \
+        -DCMAKE_EXE_LINKER_FLAGS='-sWASM_BIGINT=0 $WASM_COMPAT' \
         -G Ninja \
         -S . \
         -B build"
 
 RUN bash -lc "source /home/gbemu/emsdk/emsdk_env.sh && \
     emmake ninja -C build"
+
+# The generated JS uses syntax newer than Chromium 69 (optional chaining, ??=, ||=).
+# Lower it with esbuild, using the node that ships with emsdk.
+RUN bash -lc "source /home/gbemu/emsdk/emsdk_env.sh && \
+    mkdir -p /home/gbemu/lower && cd /home/gbemu/lower && \
+    npm init -y >/dev/null && npm install --no-audit --no-fund esbuild@0.24.0 >/dev/null && \
+    npx esbuild /home/gbemu/gb-emu-tizen/build/gb-emu.js \
+        --target=chrome69 --allow-overwrite --log-level=warning \
+        --outfile=/home/gbemu/gb-emu-tizen/build/gb-emu.js"
+
+# Emscripten's prebuilt libc (memcpy/memset) still uses bulk memory, so lower the linked
+# module and write it with only the features Chromium 69 accepts (sign-ext and mutable
+# globals are supported there). wasm-opt fails the build if anything else is left.
+RUN /home/gbemu/emsdk/upstream/bin/wasm-opt build/gb-emu.wasm \
+        --enable-bulk-memory --enable-bulk-memory-opt --enable-sign-ext \
+        --enable-nontrapping-float-to-int --enable-mutable-globals \
+        --llvm-memory-copy-fill-lowering --llvm-nontrapping-fptoint-lowering -O3 \
+        -o build/gb-emu.lowered.wasm && \
+    /home/gbemu/emsdk/upstream/bin/wasm-opt build/gb-emu.lowered.wasm \
+        --mvp-features --enable-sign-ext --enable-mutable-globals \
+        -o build/gb-emu.wasm && \
+    rm build/gb-emu.lowered.wasm
 
 # GB-EMU_Tizen upstream ships no Tizen widget wrapper of its own; config.xml
 # and icon.png now live in res/ in this repo (D:\brightcraft\GB-EMU_Tizen\res)
