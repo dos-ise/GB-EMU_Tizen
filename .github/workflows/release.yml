@@ -20,6 +20,20 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      # For versioned releases, write the version into the widget manifest so the packaged .wgt reports it
+      # (the Apps2Samsung catalog reads the version from config.xml). The input is passed via env, not inlined.
+      - name: Set widget version from release input
+        if: ${{ github.event.inputs.version != '' }}
+        env:
+          VERSION: ${{ github.event.inputs.version }}
+        run: |
+          if ! [[ "$VERSION" =~ ^[0-9]+(\.[0-9]+){1,2}$ ]]; then
+            echo "::error::Invalid version '$VERSION'. Use numeric form like 1.2 or 1.2.0."
+            exit 1
+          fi
+          sed -i -E "/^ +version=\"/ s/(version=\")[^\"]*(\")/\1${VERSION}\2/" res/config.xml
+          grep -H 'version="' res/config.xml
+
       - name: Build Docker image
         run: docker build -t gbemu-tizen .
 
